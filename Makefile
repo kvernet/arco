@@ -15,5 +15,5 @@ fix:
 	cargo fmt --all
 
 ci-act:
-	act -W .github/workflows/ci.yml --artifact-server-path \
-		/tmp/act-artifacts --env ACT_SKIP_UPLOAD=true
+	act -P ubuntu-latest=catthehacker/ubuntu:full-latest \
+		--artifact-server-path /tmp/act-artifacts
