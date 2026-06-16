@@ -6,13 +6,10 @@
 //!     distinguishable via observation operators.
 
 use bincode::Encode;
-use rand::Rng;
-use rand::RngExt;
+use rand::{Rng, RngExt};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::fmt;
-use std::fmt::Debug;
-use std::fmt::Write;
+use std::fmt::{self, Debug, Write};
 use std::hash::{Hash, Hasher};
 
 // ===================================================================
@@ -39,7 +36,7 @@ pub trait State: Clone + Eq + Hash + Send + Sync + Serialize {
     /// Return a deterministic, unique encoding of the complete state.
     ///
     /// This is the identity observation — the maximally dynamically
-    /// sufficient observation operator (Constitution Part 1.4.3).
+    /// sufficient observation operator (Arco Constitution).
     fn canonical_encoding(&self) -> Self::Encoding;
 
     /// Hamming distance between this state and another.
@@ -56,9 +53,6 @@ pub trait State: Clone + Eq + Hash + Send + Sync + Serialize {
         let encoding = self.canonical_encoding();
         let bytes = bincode::encode_to_vec(&encoding, bincode::config::standard())
             .unwrap_or_else(|_| format!("{:?}", encoding).into_bytes());
-        //let hash = Sha256::digest(&bytes);
-        //format!("{:x}", hash)
-
         let hash = Sha256::digest(&bytes);
         let mut hex = String::new();
         for byte in hash.as_slice() {
@@ -87,7 +81,7 @@ pub trait State: Clone + Eq + Hash + Send + Sync + Serialize {
 ///
 /// States are **vertex-order dependent**. Two isomorphic graphs with
 /// permuted vertex labels are distinct states. Canonical graph isomorphism
-/// reduction is deferred to the equivalence layer (Constitution Part 6).
+/// reduction is deferred to the equivalence layer (Arco Constitution).
 ///
 /// # Examples
 ///

@@ -4,4 +4,5 @@
 //! the minimal mathematical conditions under which computation, memory,
 //! and learning emerge within arbitrary information systems.
 
+pub mod rules;
 pub mod state;
