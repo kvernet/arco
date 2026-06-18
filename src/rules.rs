@@ -1,6 +1,6 @@
 //! Rule trait and rewrite rule implementations.
 //!
-//! Per Constitution v0.4, Part 1.3:
+//! Per Constitution:
 //!     T is a set of maps from S to S. T must form a semigroup under
 //!     composition. Rules have a condition (matches) and an action (apply),
 //!     returning new states.
@@ -9,25 +9,74 @@
 //! - **structured**: semantically meaningful information-processing operations
 //! - **destructive**: entropy-increasing operations for null-distribution calibration
 //!
+//! # MatchInfo
+//!
+//! When a rule matches, it returns a [`MatchInfo`] carrying the specific
+//! context needed by the action (e.g., which neighbors triggered the match).
+//! This avoids double-scanning the state and guarantees that `apply()` uses
+//! the same match data that `matches()` found.
+//!
 //! Design contracts:
 //! - Rules are immutable and stateless. Randomness comes from an externally
 //!   provided RNG, not from rule state.
 //! - Condition and action callables must be pure functions.
 //! - Rule equality is based on (name, rule_type), not function identity.
 //! - Rules use Arc for shared ownership, enabling Clone via reference counting.
+//! - `apply()` is safe to call with any `MatchInfo` — it will not panic,
+//!   though the result may be a no-op if the info doesn't match the rule.
 
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use rand::{Rng, RngExt};
 use sha2::{Digest, Sha256};
 
 use crate::state::BinaryGraphState;
 
-type ConditionFn = Arc<dyn Fn(&BinaryGraphState, usize) -> bool + Send + Sync>;
+// ===================================================================
+// Type aliases for complex function signatures
+// ===================================================================
+
+type ConditionFn = Arc<dyn Fn(&BinaryGraphState, usize) -> Option<MatchInfo> + Send + Sync>;
 type ActionFn =
-    Arc<dyn Fn(&BinaryGraphState, usize, &mut dyn Rng) -> BinaryGraphState + Send + Sync>;
+    Arc<dyn Fn(&BinaryGraphState, &MatchInfo, &mut dyn Rng) -> BinaryGraphState + Send + Sync>;
+
+// ===================================================================
+// MatchInfo
+// ===================================================================
+
+/// Context captured during rule matching, passed to `apply()`.
+///
+/// Carries the vertex where the rule fires and any additional context
+/// the action needs (incoming neighbors, outgoing neighbors, swap target).
+/// This avoids double-scanning the state and guarantees that `apply()`
+/// uses the same match data that `matches()` found.
+#[derive(Debug, Clone)]
+pub enum MatchInfo {
+    /// Rule fires unconditionally at this vertex.
+    Unconditional { vertex: usize },
+    /// Rule fires at vertex, using these specific incoming neighbors.
+    Incoming { vertex: usize, sources: Vec<usize> },
+    /// Rule fires at vertex, using these specific outgoing neighbors.
+    Outgoing { vertex: usize, targets: Vec<usize> },
+    /// Rule fires at vertex, swapping with this specific neighbor.
+    Swap { vertex: usize, other: usize },
+}
+
+impl MatchInfo {
+    /// The vertex where the rule fires.
+    pub fn vertex(&self) -> usize {
+        match self {
+            MatchInfo::Unconditional { vertex } => *vertex,
+            MatchInfo::Incoming { vertex, .. } => *vertex,
+            MatchInfo::Outgoing { vertex, .. } => *vertex,
+            MatchInfo::Swap { vertex, .. } => *vertex,
+        }
+    }
+}
 
 // ===================================================================
 // Rule trait
@@ -35,8 +84,9 @@ type ActionFn =
 
 /// Trait for a graph rewrite rule.
 ///
-/// A rule has a human-readable name, a semantic type, a condition predicate,
-/// and an action function.
+/// A rule has a human-readable name, a semantic type, a condition predicate
+/// that returns [`MatchInfo`] on success, and an action function that consumes
+/// that match info.
 pub trait Rule: fmt::Debug + Send + Sync {
     /// Human-readable rule identifier.
     fn name(&self) -> &str;
@@ -45,19 +95,32 @@ pub trait Rule: fmt::Debug + Send + Sync {
     fn rule_type(&self) -> &str;
 
     /// Whether the rule always produces the same output for the same
-    /// (state, vertex) pair, independent of the RNG.
+    /// (state, match_info) pair, independent of the RNG.
     fn is_deterministic(&self) -> bool;
 
     /// Maximum graph distance affected by this rule (0 = self only,
-    /// 1 = neighbors, n = global).
+    /// 1 = neighbors, `usize::MAX` = global).
     fn locality_radius(&self) -> usize;
 
     /// Test whether this rule can fire at the given vertex.
-    fn matches(&self, state: &BinaryGraphState, vertex: usize) -> bool;
+    ///
+    /// Returns `Some(MatchInfo)` with the match context if the rule applies,
+    /// or `None` if it does not.
+    fn matches(&self, state: &BinaryGraphState, vertex: usize) -> Option<MatchInfo>;
 
-    /// Apply this rule at the given vertex, returning a new state.
-    fn apply(&self, state: &BinaryGraphState, vertex: usize, rng: &mut dyn Rng)
-    -> BinaryGraphState;
+    /// Apply this rule using the match info from a successful match.
+    ///
+    /// # Safety
+    ///
+    /// This method is safe to call with any `MatchInfo`. If the info
+    /// does not match the rule's expected variant, the call is a no-op
+    /// (returns a clone of the input state). It will not panic.
+    fn apply(
+        &self,
+        state: &BinaryGraphState,
+        info: &MatchInfo,
+        rng: &mut dyn Rng,
+    ) -> BinaryGraphState;
 
     /// Stable digest of the rule's structural identity (name + type).
     fn stable_digest(&self) -> String {
@@ -79,7 +142,7 @@ pub trait Rule: fmt::Debug + Send + Sync {
 /// A concrete graph rewrite rule with explicit semantics.
 ///
 /// Uses `Arc` internally for function fields, enabling cheap cloning
-/// via reference counting. This is required for `compose()` to capture
+/// via reference counting. This is required for [`compose`] to capture
 /// rules in closures without unsafe code.
 #[derive(Clone)]
 pub struct RewriteRule {
@@ -98,15 +161,15 @@ impl RewriteRule {
     /// # Arguments
     /// * `name` — Unique rule identifier.
     /// * `rule_type` — `"structured"` or `"destructive"`.
-    /// * `condition_fn` — Pure function `(state, vertex) -> bool`.
-    /// * `action_fn` — Pure function `(state, vertex, rng) -> BinaryGraphState`.
+    /// * `condition_fn` — Pure function `(state, vertex) -> Option<MatchInfo>`.
+    /// * `action_fn` — Pure function `(state, match_info, rng) -> BinaryGraphState`.
     /// * `deterministic` — Whether the rule ignores the RNG.
     /// * `locality_radius` — Maximum graph distance affected.
     pub fn new(
         name: impl Into<String>,
         rule_type: impl Into<String>,
-        condition_fn: impl Fn(&BinaryGraphState, usize) -> bool + Send + Sync + 'static,
-        action_fn: impl Fn(&BinaryGraphState, usize, &mut dyn Rng) -> BinaryGraphState
+        condition_fn: impl Fn(&BinaryGraphState, usize) -> Option<MatchInfo> + Send + Sync + 'static,
+        action_fn: impl Fn(&BinaryGraphState, &MatchInfo, &mut dyn Rng) -> BinaryGraphState
         + Send
         + Sync
         + 'static,
@@ -149,17 +212,17 @@ impl Rule for RewriteRule {
         self.locality
     }
 
-    fn matches(&self, state: &BinaryGraphState, vertex: usize) -> bool {
+    fn matches(&self, state: &BinaryGraphState, vertex: usize) -> Option<MatchInfo> {
         (self.condition_fn)(state, vertex)
     }
 
     fn apply(
         &self,
         state: &BinaryGraphState,
-        vertex: usize,
+        info: &MatchInfo,
         rng: &mut dyn Rng,
     ) -> BinaryGraphState {
-        (self.action_fn)(state, vertex, rng)
+        (self.action_fn)(state, info, rng)
     }
 }
 
@@ -191,11 +254,14 @@ impl Hash for RewriteRule {
 // Rule composition (semigroup requirement)
 // ===================================================================
 
-/// Compose two rules sequentially: apply r1, then r2.
+/// Compose two rules sequentially: apply `r1`, then `r2`.
 ///
-/// The composed rule matches if r1 matches, and its action is r2 applied
-/// after r1. This satisfies the semigroup requirement of Constitution
-/// Part 1.3.2.
+/// The composed rule matches if `r1` matches, and its action is `r2`
+/// applied after `r1`. The name follows standard mathematical notation:
+/// `compose(r1, r2)` produces the rule named `(r2∘r1)` — "apply r1
+/// first, then r2."
+///
+/// This satisfies the semigroup requirement of the Constitution.
 ///
 /// Uses `Arc` internally — cloning the source rules is cheap (reference
 /// count increment).
@@ -209,13 +275,16 @@ pub fn compose(r1: &RewriteRule, r2: &RewriteRule) -> RewriteRule {
     let loc = r1.locality_radius().max(r2.locality_radius());
 
     RewriteRule::new(
-        format!("({}∘{})", r1.name(), r2.name()),
+        format!("({}∘{})", r2.name(), r1.name()),
         r1.rule_type().to_string(),
-        move |state, vertex| r1a.matches(state, vertex),
-        move |state, vertex, rng| {
-            let intermediate = r1b.apply(state, vertex, rng);
-            if r2a.matches(&intermediate, vertex) {
-                r2b.apply(&intermediate, vertex, rng)
+        move |state: &BinaryGraphState, vertex: usize| -> Option<MatchInfo> {
+            r1a.matches(state, vertex)
+        },
+        move |state: &BinaryGraphState, info: &MatchInfo, rng: &mut dyn Rng| -> BinaryGraphState {
+            let intermediate = r1b.apply(state, info, rng);
+            let v = info.vertex();
+            if let Some(info2) = r2a.matches(&intermediate, v) {
+                r2b.apply(&intermediate, &info2, rng)
             } else {
                 intermediate
             }
@@ -239,11 +308,15 @@ pub fn compose(r1: &RewriteRule, r2: &RewriteRule) -> RewriteRule {
 pub fn create_structured_rules() -> Vec<RewriteRule> {
     let mut rules = Vec::new();
 
+    // ================================================================
+    // Pointwise rules
+    // ================================================================
+
     // R0: IDENTITY
     rules.push(RewriteRule::new(
         "IDENTITY",
         "structured",
-        |_, _| true,
+        |_, vertex| Some(MatchInfo::Unconditional { vertex }),
         |state, _, _| state.clone(),
         true,
         0,
@@ -253,266 +326,24 @@ pub fn create_structured_rules() -> Vec<RewriteRule> {
     rules.push(RewriteRule::new(
         "TOGGLE",
         "structured",
-        |_, _| true,
-        |state, vertex, _| {
-            let val = state.label(vertex);
-            state.mutate_label(vertex, 1 - val).unwrap()
+        |_, vertex| Some(MatchInfo::Unconditional { vertex }),
+        |state, info, _| {
+            let val = state.label(info.vertex());
+            state.mutate_label(info.vertex(), 1 - val).unwrap()
         },
         true,
         0,
-    ));
-
-    // R2: COPY_FROM_IN
-    rules.push(RewriteRule::new(
-        "COPY_FROM_IN",
-        "structured",
-        |state, vertex| {
-            let n = state.n_vertices();
-            for i in 0..n {
-                if state.edge(i, vertex) == 1 {
-                    return true;
-                }
-            }
-            false
-        },
-        |state, vertex, _| {
-            let n = state.n_vertices();
-            for i in 0..n {
-                if state.edge(i, vertex) == 1 {
-                    let src_label = state.label(i);
-                    return state.mutate_label(vertex, src_label).unwrap();
-                }
-            }
-            state.clone()
-        },
-        true,
-        1,
-    ));
-
-    // R3: COPY_TO_OUT
-    rules.push(RewriteRule::new(
-        "COPY_TO_OUT",
-        "structured",
-        |state, vertex| {
-            let n = state.n_vertices();
-            for j in 0..n {
-                if state.edge(vertex, j) == 1 {
-                    return true;
-                }
-            }
-            false
-        },
-        |state, vertex, _| {
-            let n = state.n_vertices();
-            for j in 0..n {
-                if state.edge(vertex, j) == 1 {
-                    let src_label = state.label(vertex);
-                    return state.mutate_label(j, src_label).unwrap();
-                }
-            }
-            state.clone()
-        },
-        true,
-        1,
-    ));
-
-    // R4-R8: Logic gates
-    let gate_condition = |state: &BinaryGraphState, vertex: usize| -> bool {
-        let n = state.n_vertices();
-        let mut count = 0;
-        for i in 0..n {
-            if state.edge(i, vertex) == 1 {
-                count += 1;
-            }
-        }
-        count >= 2
-    };
-
-    let get_two = |state: &BinaryGraphState, vertex: usize| -> (u8, u8) {
-        let n = state.n_vertices();
-        let mut inputs = Vec::new();
-        for i in 0..n {
-            if state.edge(i, vertex) == 1 {
-                inputs.push(state.label(i));
-                if inputs.len() == 2 {
-                    break;
-                }
-            }
-        }
-        (inputs[0], inputs[1])
-    };
-
-    // NAND
-    rules.push(RewriteRule::new(
-        "NAND",
-        "structured",
-        gate_condition,
-        move |state, vertex, _| {
-            let (a, b) = get_two(state, vertex);
-            state.mutate_label(vertex, 1 - (a & b)).unwrap()
-        },
-        true,
-        1,
-    ));
-
-    // NOR
-    rules.push(RewriteRule::new(
-        "NOR",
-        "structured",
-        gate_condition,
-        move |state, vertex, _| {
-            let (a, b) = get_two(state, vertex);
-            state.mutate_label(vertex, 1 - (a | b)).unwrap()
-        },
-        true,
-        1,
-    ));
-
-    // AND
-    rules.push(RewriteRule::new(
-        "AND",
-        "structured",
-        gate_condition,
-        move |state, vertex, _| {
-            let (a, b) = get_two(state, vertex);
-            state.mutate_label(vertex, a & b).unwrap()
-        },
-        true,
-        1,
-    ));
-
-    // OR
-    rules.push(RewriteRule::new(
-        "OR",
-        "structured",
-        gate_condition,
-        move |state, vertex, _| {
-            let (a, b) = get_two(state, vertex);
-            state.mutate_label(vertex, a | b).unwrap()
-        },
-        true,
-        1,
-    ));
-
-    // XOR
-    rules.push(RewriteRule::new(
-        "XOR",
-        "structured",
-        gate_condition,
-        move |state, vertex, _| {
-            let (a, b) = get_two(state, vertex);
-            state.mutate_label(vertex, a ^ b).unwrap()
-        },
-        true,
-        1,
-    ));
-
-    // R9: NOT
-    rules.push(RewriteRule::new(
-        "NOT",
-        "structured",
-        |state, vertex| {
-            let n = state.n_vertices();
-            for i in 0..n {
-                if state.edge(i, vertex) == 1 {
-                    return true;
-                }
-            }
-            false
-        },
-        |state, vertex, _| {
-            let n = state.n_vertices();
-            for i in 0..n {
-                if state.edge(i, vertex) == 1 {
-                    let src_label = state.label(i);
-                    return state.mutate_label(vertex, 1 - src_label).unwrap();
-                }
-            }
-            state.clone()
-        },
-        true,
-        1,
-    ));
-
-    // R10: SWAP
-    rules.push(RewriteRule::new(
-        "SWAP",
-        "structured",
-        |state, vertex| {
-            let n = state.n_vertices();
-            for j in 0..n {
-                if state.edge(vertex, j) == 1 || state.edge(j, vertex) == 1 {
-                    return true;
-                }
-            }
-            false
-        },
-        |state, vertex, _| {
-            let n = state.n_vertices();
-            for j in 0..n {
-                if state.edge(vertex, j) == 1 {
-                    let a = state.label(vertex);
-                    let b = state.label(j);
-                    let mut labels: Vec<u8> = (0..n).map(|i| state.label(i)).collect();
-                    labels[vertex] = b;
-                    labels[j] = a;
-                    return state.mutate_labels(&labels).unwrap();
-                }
-            }
-            for j in 0..n {
-                if state.edge(j, vertex) == 1 {
-                    let a = state.label(vertex);
-                    let b = state.label(j);
-                    let mut labels: Vec<u8> = (0..n).map(|i| state.label(i)).collect();
-                    labels[vertex] = b;
-                    labels[j] = a;
-                    return state.mutate_labels(&labels).unwrap();
-                }
-            }
-            state.clone()
-        },
-        true,
-        1,
-    ));
-
-    // R11: PROPAGATE (multi-write — writes to all outgoing neighbors)
-    rules.push(RewriteRule::new(
-        "PROPAGATE",
-        "structured",
-        |state, vertex| {
-            let n = state.n_vertices();
-            for j in 0..n {
-                if state.edge(vertex, j) == 1 {
-                    return true;
-                }
-            }
-            false
-        },
-        |state, vertex, _| {
-            let n = state.n_vertices();
-            let src_label = state.label(vertex);
-            let mut labels: Vec<u8> = (0..n).map(|i| state.label(i)).collect();
-
-            for j in 0..n {
-                if state.edge(vertex, j) == 1 {
-                    labels[j] = src_label;
-                }
-            }
-            state.mutate_labels(&labels).unwrap()
-        },
-        true,
-        1,
     ));
 
     // R12: PRESERVE_NOISY (90% preserve, 10% flip)
     rules.push(RewriteRule::new(
         "PRESERVE_NOISY",
         "structured",
-        |_, _| true,
-        |state, vertex, rng| {
+        |_, vertex| Some(MatchInfo::Unconditional { vertex }),
+        |state, info, rng| {
             if rng.random_bool(0.1) {
-                let val = state.label(vertex);
-                state.mutate_label(vertex, 1 - val).unwrap()
+                let val = state.label(info.vertex());
+                state.mutate_label(info.vertex(), 1 - val).unwrap()
             } else {
                 state.clone()
             }
@@ -525,8 +356,8 @@ pub fn create_structured_rules() -> Vec<RewriteRule> {
     rules.push(RewriteRule::new(
         "CONST_0",
         "structured",
-        |_, _| true,
-        |state, vertex, _| state.mutate_label(vertex, 0).unwrap(),
+        |_, vertex| Some(MatchInfo::Unconditional { vertex }),
+        |state, info, _| state.mutate_label(info.vertex(), 0).unwrap(),
         true,
         0,
     ));
@@ -535,38 +366,312 @@ pub fn create_structured_rules() -> Vec<RewriteRule> {
     rules.push(RewriteRule::new(
         "CONST_1",
         "structured",
-        |_, _| true,
-        |state, vertex, _| state.mutate_label(vertex, 1).unwrap(),
+        |_, vertex| Some(MatchInfo::Unconditional { vertex }),
+        |state, info, _| state.mutate_label(info.vertex(), 1).unwrap(),
         true,
         0,
     ));
 
-    // R15: MAJORITY
+    // ================================================================
+    // Neighborhood-read rules
+    // ================================================================
+
+    // R2: COPY_FROM_IN — copies label from first incoming neighbor
+    rules.push(RewriteRule::new(
+        "COPY_FROM_IN",
+        "structured",
+        |state, vertex| {
+            let n = state.n_vertices();
+            for i in 0..n {
+                if state.edge(i, vertex) == 1 {
+                    return Some(MatchInfo::Incoming {
+                        vertex,
+                        sources: vec![i],
+                    });
+                }
+            }
+            None
+        },
+        |state, info, _| {
+            if let MatchInfo::Incoming { vertex, sources } = info {
+                let src_label = state.label(sources[0]);
+                state.mutate_label(*vertex, src_label).unwrap()
+            } else {
+                state.clone()
+            }
+        },
+        true,
+        1,
+    ));
+
+    // R4-R8: Logic gates (NAND, NOR, AND, OR, XOR)
+    // All share the same condition: at least 2 incoming edges.
+    // The match info carries exactly the first two sources.
+
+    let gate_condition = |state: &BinaryGraphState, vertex: usize| -> Option<MatchInfo> {
+        let n = state.n_vertices();
+        let mut sources = Vec::new();
+        for i in 0..n {
+            if state.edge(i, vertex) == 1 {
+                sources.push(i);
+                if sources.len() == 2 {
+                    return Some(MatchInfo::Incoming { vertex, sources });
+                }
+            }
+        }
+        None
+    };
+
+    // NAND
+    rules.push(RewriteRule::new(
+        "NAND",
+        "structured",
+        gate_condition,
+        |state, info, _| {
+            if let MatchInfo::Incoming { vertex, sources } = info {
+                let a = state.label(sources[0]);
+                let b = state.label(sources[1]);
+                state.mutate_label(*vertex, 1 - (a & b)).unwrap()
+            } else {
+                state.clone()
+            }
+        },
+        true,
+        1,
+    ));
+
+    // NOR
+    rules.push(RewriteRule::new(
+        "NOR",
+        "structured",
+        gate_condition,
+        |state, info, _| {
+            if let MatchInfo::Incoming { vertex, sources } = info {
+                let a = state.label(sources[0]);
+                let b = state.label(sources[1]);
+                state.mutate_label(*vertex, 1 - (a | b)).unwrap()
+            } else {
+                state.clone()
+            }
+        },
+        true,
+        1,
+    ));
+
+    // AND
+    rules.push(RewriteRule::new(
+        "AND",
+        "structured",
+        gate_condition,
+        |state, info, _| {
+            if let MatchInfo::Incoming { vertex, sources } = info {
+                let a = state.label(sources[0]);
+                let b = state.label(sources[1]);
+                state.mutate_label(*vertex, a & b).unwrap()
+            } else {
+                state.clone()
+            }
+        },
+        true,
+        1,
+    ));
+
+    // OR
+    rules.push(RewriteRule::new(
+        "OR",
+        "structured",
+        gate_condition,
+        |state, info, _| {
+            if let MatchInfo::Incoming { vertex, sources } = info {
+                let a = state.label(sources[0]);
+                let b = state.label(sources[1]);
+                state.mutate_label(*vertex, a | b).unwrap()
+            } else {
+                state.clone()
+            }
+        },
+        true,
+        1,
+    ));
+
+    // XOR
+    rules.push(RewriteRule::new(
+        "XOR",
+        "structured",
+        gate_condition,
+        |state, info, _| {
+            if let MatchInfo::Incoming { vertex, sources } = info {
+                let a = state.label(sources[0]);
+                let b = state.label(sources[1]);
+                state.mutate_label(*vertex, a ^ b).unwrap()
+            } else {
+                state.clone()
+            }
+        },
+        true,
+        1,
+    ));
+
+    // R9: NOT — requires at least 1 incoming edge
+    rules.push(RewriteRule::new(
+        "NOT",
+        "structured",
+        |state, vertex| {
+            let n = state.n_vertices();
+            for i in 0..n {
+                if state.edge(i, vertex) == 1 {
+                    return Some(MatchInfo::Incoming {
+                        vertex,
+                        sources: vec![i],
+                    });
+                }
+            }
+            None
+        },
+        |state, info, _| {
+            if let MatchInfo::Incoming { vertex, sources } = info {
+                let src_label = state.label(sources[0]);
+                state.mutate_label(*vertex, 1 - src_label).unwrap()
+            } else {
+                state.clone()
+            }
+        },
+        true,
+        1,
+    ));
+
+    // R15: MAJORITY — requires at least 3 incoming edges
     rules.push(RewriteRule::new(
         "MAJORITY",
         "structured",
         |state, vertex| {
             let n = state.n_vertices();
-            let mut count = 0;
+            let mut sources = Vec::new();
             for i in 0..n {
                 if state.edge(i, vertex) == 1 {
-                    count += 1;
+                    sources.push(i);
                 }
             }
-            count >= 3
+            if sources.len() >= 3 {
+                Some(MatchInfo::Incoming { vertex, sources })
+            } else {
+                None
+            }
         },
-        |state, vertex, _| {
+        |state, info, _| {
+            if let MatchInfo::Incoming { vertex, sources } = info {
+                let mut ones = 0u32;
+                let total = sources.len() as u32;
+                for &src in sources {
+                    ones += state.label(src) as u32;
+                }
+                let result = if ones > total - ones { 1 } else { 0 };
+                state.mutate_label(*vertex, result).unwrap()
+            } else {
+                state.clone()
+            }
+        },
+        true,
+        1,
+    ));
+
+    // ================================================================
+    // Multi-write rules
+    // ================================================================
+
+    // R3: COPY_TO_OUT — copies label to first outgoing neighbor
+    rules.push(RewriteRule::new(
+        "COPY_TO_OUT",
+        "structured",
+        |state, vertex| {
             let n = state.n_vertices();
-            let mut ones = 0u32;
-            let mut total = 0u32;
-            for i in 0..n {
-                if state.edge(i, vertex) == 1 {
-                    total += 1;
-                    ones += state.label(i) as u32;
+            for j in 0..n {
+                if state.edge(vertex, j) == 1 {
+                    return Some(MatchInfo::Outgoing {
+                        vertex,
+                        targets: vec![j],
+                    });
                 }
             }
-            let result = if ones > total - ones { 1 } else { 0 };
-            state.mutate_label(vertex, result).unwrap()
+            None
+        },
+        |state, info, _| {
+            if let MatchInfo::Outgoing { vertex, targets } = info {
+                let src_label = state.label(*vertex);
+                state.mutate_label(targets[0], src_label).unwrap()
+            } else {
+                state.clone()
+            }
+        },
+        true,
+        1,
+    ));
+
+    // R10: SWAP — exchanges labels with first neighbor (outgoing preferred)
+    rules.push(RewriteRule::new(
+        "SWAP",
+        "structured",
+        |state, vertex| {
+            let n = state.n_vertices();
+            for j in 0..n {
+                if state.edge(vertex, j) == 1 {
+                    return Some(MatchInfo::Swap { vertex, other: j });
+                }
+            }
+            for j in 0..n {
+                if state.edge(j, vertex) == 1 {
+                    return Some(MatchInfo::Swap { vertex, other: j });
+                }
+            }
+            None
+        },
+        |state, info, _| {
+            if let MatchInfo::Swap { vertex, other } = info {
+                let a = state.label(*vertex);
+                let b = state.label(*other);
+                let n = state.n_vertices();
+                let mut labels: Vec<u8> = (0..n).map(|i| state.label(i)).collect();
+                labels[*vertex] = b;
+                labels[*other] = a;
+                state.mutate_labels(&labels).unwrap()
+            } else {
+                state.clone()
+            }
+        },
+        true,
+        1,
+    ));
+
+    // R11: PROPAGATE — copies label to ALL outgoing neighbors (multi-write)
+    rules.push(RewriteRule::new(
+        "PROPAGATE",
+        "structured",
+        |state, vertex| {
+            let n = state.n_vertices();
+            let mut targets = Vec::new();
+            for j in 0..n {
+                if state.edge(vertex, j) == 1 {
+                    targets.push(j);
+                }
+            }
+            if targets.is_empty() {
+                None
+            } else {
+                Some(MatchInfo::Outgoing { vertex, targets })
+            }
+        },
+        |state, info, _| {
+            if let MatchInfo::Outgoing { vertex, targets } = info {
+                let src_label = state.label(*vertex);
+                let n = state.n_vertices();
+                let mut labels: Vec<u8> = (0..n).map(|i| state.label(i)).collect();
+                for &t in targets {
+                    labels[t] = src_label;
+                }
+                state.mutate_labels(&labels).unwrap()
+            } else {
+                state.clone()
+            }
         },
         true,
         1,
@@ -586,7 +691,7 @@ pub fn create_structured_rules() -> Vec<RewriteRule> {
 /// represents genuine information scrambling.
 ///
 /// The 5:1 weighting of scramble_all ensures the null distribution
-/// is properly destructive, matching the Python reference implementation.
+/// is properly destructive.
 pub fn create_destructive_rules() -> Vec<RewriteRule> {
     let mut rules = Vec::new();
 
@@ -595,7 +700,7 @@ pub fn create_destructive_rules() -> Vec<RewriteRule> {
         rules.push(RewriteRule::new(
             format!("DESTROY_SCRAMBLE_ALL_{}", k),
             "destructive",
-            |_, _| true,
+            |_, vertex| Some(MatchInfo::Unconditional { vertex }),
             |state, _, rng| {
                 let n = state.n_vertices();
                 let new_labels: Vec<u8> = (0..n).map(|_| rng.random_range(0..=1)).collect();
@@ -606,32 +711,36 @@ pub fn create_destructive_rules() -> Vec<RewriteRule> {
         ));
     }
 
-    // RANDOMIZE
+    // RANDOMIZE — randomize a single label
     rules.push(RewriteRule::new(
         "DESTROY_RANDOMIZE",
         "destructive",
-        |_, _| true,
-        |state, vertex, rng| state.mutate_label(vertex, rng.random_range(0..=1)).unwrap(),
+        |_, vertex| Some(MatchInfo::Unconditional { vertex }),
+        |state, info, rng| {
+            state
+                .mutate_label(info.vertex(), rng.random_range(0..=1))
+                .unwrap()
+        },
         false,
         0,
     ));
 
-    // ZERO_OUT
+    // ZERO_OUT — set a single label to 0
     rules.push(RewriteRule::new(
         "DESTROY_ZERO",
         "destructive",
-        |_, _| true,
-        |state, vertex, _| state.mutate_label(vertex, 0).unwrap(),
+        |_, vertex| Some(MatchInfo::Unconditional { vertex }),
+        |state, info, _| state.mutate_label(info.vertex(), 0).unwrap(),
         true,
         0,
     ));
 
-    // ONE_OUT
+    // ONE_OUT — set a single label to 1
     rules.push(RewriteRule::new(
         "DESTROY_ONE",
         "destructive",
-        |_, _| true,
-        |state, vertex, _| state.mutate_label(vertex, 1).unwrap(),
+        |_, vertex| Some(MatchInfo::Unconditional { vertex }),
+        |state, info, _| state.mutate_label(info.vertex(), 1).unwrap(),
         true,
         0,
     ));
@@ -802,7 +911,8 @@ mod tests {
         let identity = rules.iter().find(|r| r.name() == "IDENTITY").unwrap();
 
         let mut rng = StdRng::seed_from_u64(42);
-        let result = identity.apply(&state, 0, &mut rng);
+        let info = identity.matches(&state, 0).unwrap();
+        let result = identity.apply(&state, &info, &mut rng);
         assert_eq!(state.canonical_encoding(), result.canonical_encoding());
     }
 
@@ -821,7 +931,8 @@ mod tests {
         let toggle = rules.iter().find(|r| r.name() == "TOGGLE").unwrap();
 
         let mut rng = StdRng::seed_from_u64(42);
-        let result = toggle.apply(&state, 0, &mut rng);
+        let info = toggle.matches(&state, 0).unwrap();
+        let result = toggle.apply(&state, &info, &mut rng);
         assert_eq!(result.label(0), 1);
         assert_eq!(state.label(0), 0);
     }
@@ -845,7 +956,8 @@ mod tests {
             let labels = arr1(&[a, b, 0]);
             let state = BinaryGraphState::new(3, adj.view(), labels.view()).unwrap();
 
-            let result = nand.apply(&state, 2, &mut rng);
+            let info = nand.matches(&state, 2).unwrap();
+            let result = nand.apply(&state, &info, &mut rng);
             assert_eq!(
                 result.label(2),
                 expected,
@@ -855,6 +967,44 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn test_nand_no_match_on_few_inputs() {
+        use crate::state::BinaryGraphState;
+        use ndarray::{arr1, arr2};
+
+        let rules = create_structured_rules();
+        let nand = rules.iter().find(|r| r.name() == "NAND").unwrap();
+
+        // Only 1 incoming edge — should not match
+        let adj = arr2(&[[0, 0, 1], [0, 0, 0], [0, 0, 0]]);
+        let labels = arr1(&[0, 0, 0]);
+        let state = BinaryGraphState::new(3, adj.view(), labels.view()).unwrap();
+
+        assert!(nand.matches(&state, 2).is_none());
+    }
+
+    #[test]
+    fn test_apply_safe_with_wrong_match_info() {
+        use crate::state::BinaryGraphState;
+        use ndarray::{arr1, arr2};
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+
+        let rules = create_structured_rules();
+        let nand = rules.iter().find(|r| r.name() == "NAND").unwrap();
+
+        let adj = arr2(&[[0, 0, 0], [0, 0, 0], [0, 0, 0]]);
+        let labels = arr1(&[0, 0, 0]);
+        let state = BinaryGraphState::new(3, adj.view(), labels.view()).unwrap();
+
+        let mut rng = StdRng::seed_from_u64(42);
+        // Pass Unconditional info to a gate rule — should not panic
+        let wrong_info = MatchInfo::Unconditional { vertex: 2 };
+        let result = nand.apply(&state, &wrong_info, &mut rng);
+        // Should return a clone (no-op) since info variant doesn't match
+        assert_eq!(state.canonical_encoding(), result.canonical_encoding());
     }
 
     #[test]
@@ -875,8 +1025,21 @@ mod tests {
         let composed = compose(toggle, toggle);
 
         let mut rng = StdRng::seed_from_u64(42);
-        let result = composed.apply(&state, 0, &mut rng);
+        let info = composed.matches(&state, 0).unwrap();
+        let result = composed.apply(&state, &info, &mut rng);
         assert_eq!(result.label(0), state.label(0));
+    }
+
+    #[test]
+    fn test_compose_name_notation() {
+        let rules = create_structured_rules();
+        let nand = rules.iter().find(|r| r.name() == "NAND").unwrap();
+        let xor = rules.iter().find(|r| r.name() == "XOR").unwrap();
+
+        // compose(nand, xor) applies NAND first, then XOR
+        // Notation: (XOR∘NAND) reads "XOR after NAND"
+        let composed = compose(nand, xor);
+        assert_eq!(composed.name(), "(XOR∘NAND)");
     }
 
     #[test]
@@ -940,9 +1103,8 @@ mod tests {
         let rules = create_structured_rules();
         let original = &rules[0];
         let cloned = original.clone();
-        // Equality preserved
         assert_eq!(original, &cloned);
-        // Applying both produces same result
+
         use crate::state::BinaryGraphState;
         use ndarray::{arr1, arr2};
         use rand::SeedableRng;
@@ -953,8 +1115,9 @@ mod tests {
         let state = BinaryGraphState::new(2, adj.view(), labels.view()).unwrap();
 
         let mut rng = StdRng::seed_from_u64(42);
-        let r1 = original.apply(&state, 0, &mut rng);
-        let r2 = cloned.apply(&state, 0, &mut rng);
+        let info = original.matches(&state, 0).unwrap();
+        let r1 = original.apply(&state, &info, &mut rng);
+        let r2 = cloned.apply(&state, &info, &mut rng);
         assert_eq!(r1.canonical_encoding(), r2.canonical_encoding());
     }
 }
