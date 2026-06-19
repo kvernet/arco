@@ -5,5 +5,6 @@
 //! and learning emerge within arbitrary information systems.
 
 pub mod dynamics;
+pub mod observation;
 pub mod rules;
 pub mod state;
