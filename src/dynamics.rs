@@ -158,9 +158,9 @@ pub static DEFAULT_SCHEDULE: AllVerticesSchedule = AllVerticesSchedule;
 /// * `initial_state` — The starting state.
 /// * `rules` — The rule set governing evolution.
 /// * `steps` — Number of timesteps to simulate.
+/// * `window_size` — Window size
 /// * `schedule` — The update schedule.
 /// * `obs_fn` — Observation operator `(BinaryGraphState) -> O`.
-/// * `window_size` — Window size
 /// * `seed` — Seed for the per-trajectory RNG.
 ///
 /// # Returns
@@ -169,9 +169,9 @@ pub fn generate_trajectory<O>(
     initial_state: &BinaryGraphState,
     rules: &[RewriteRule],
     steps: usize,
+    window_size: usize,
     schedule: &impl Schedule,
     obs_fn: &dyn Fn(&[BinaryGraphState]) -> O,
-    window_size: usize,
     seed: u64,
 ) -> Vec<O> {
     let mut rng = StdRng::seed_from_u64(seed);
@@ -210,9 +210,9 @@ pub fn generate_trajectory<O>(
 /// * `rules` — The rule set governing evolution.
 /// * `steps` — Number of timesteps per trajectory.
 /// * `n_ensemble` — Number of trajectories to generate (≥ 2).
+/// * `window_size` — Window size
 /// * `schedule` — The update schedule.
 /// * `obs_fn` — Observation operator `(BinaryGraphState) -> O`.
-/// * `window_size` — Window size
 /// * `base_seed` — Base seed. Trajectory `i` uses seed
 ///   `base_seed + i * 137`.
 ///
@@ -229,9 +229,9 @@ pub fn generate_ensemble<O: Clone>(
     rules: &[RewriteRule],
     steps: usize,
     n_ensemble: usize,
+    window_size: usize,
     schedule: &impl Schedule,
     obs_fn: &dyn Fn(&[BinaryGraphState]) -> O,
-    window_size: usize,
     base_seed: u64,
 ) -> Vec<Vec<O>> {
     assert!(n_ensemble >= 2, "Ensemble size must be at least 2");
@@ -250,9 +250,9 @@ pub fn generate_ensemble<O: Clone>(
             &initial_states[i],
             rules,
             steps,
+            window_size,
             schedule,
             obs_fn,
-            window_size,
             seed,
         );
         trajectories.push(traj);
@@ -374,8 +374,8 @@ mod tests {
         let schedule = AllVerticesSchedule::new();
         let obs_fn = |s: &[BinaryGraphState]| s[0].canonical_encoding();
 
-        let traj1 = generate_trajectory(&state, &rules, 10, &schedule, &obs_fn, 1, 42);
-        let traj2 = generate_trajectory(&state, &rules, 10, &schedule, &obs_fn, 1, 42);
+        let traj1 = generate_trajectory(&state, &rules, 10, 1, &schedule, &obs_fn, 42);
+        let traj2 = generate_trajectory(&state, &rules, 10, 1, &schedule, &obs_fn, 42);
 
         assert_eq!(traj1.len(), traj2.len());
         for (o1, o2) in traj1.iter().zip(traj2.iter()) {
@@ -390,8 +390,8 @@ mod tests {
         let schedule = AllVerticesSchedule::new();
         let obs_fn = |s: &[BinaryGraphState]| s[0].canonical_encoding();
 
-        let traj1 = generate_trajectory(&state, &rules, 20, &schedule, &obs_fn, 1, 42);
-        let traj2 = generate_trajectory(&state, &rules, 20, &schedule, &obs_fn, 1, 99);
+        let traj1 = generate_trajectory(&state, &rules, 20, 1, &schedule, &obs_fn, 42);
+        let traj2 = generate_trajectory(&state, &rules, 20, 1, &schedule, &obs_fn, 99);
 
         // With many steps and different seeds, trajectories should diverge
         let all_same = traj1.iter().zip(traj2.iter()).all(|(a, b)| a == b);
@@ -409,7 +409,7 @@ mod tests {
         let obs_fn = |s: &[BinaryGraphState]| s[0].canonical_encoding();
         let initial_states = vec![state.clone(), state.clone(), state.clone()];
 
-        let ensemble = generate_ensemble(&initial_states, &rules, 10, 3, &schedule, &obs_fn, 1, 42);
+        let ensemble = generate_ensemble(&initial_states, &rules, 10, 3, 1, &schedule, &obs_fn, 42);
 
         assert_eq!(ensemble.len(), 3);
         for traj in &ensemble {
@@ -426,7 +426,7 @@ mod tests {
         let obs_fn = |s: &[BinaryGraphState]| s[0].canonical_encoding();
         let initial_states = vec![state.clone()];
 
-        generate_ensemble(&initial_states, &rules, 10, 1, &schedule, &obs_fn, 1, 42);
+        generate_ensemble(&initial_states, &rules, 10, 1, 1, &schedule, &obs_fn, 42);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! the minimal mathematical conditions under which computation, memory,
 //! and learning emerge within arbitrary information systems.
 
+pub mod calibration;
 pub mod dynamics;
 pub mod metrics;
 pub mod observation;
