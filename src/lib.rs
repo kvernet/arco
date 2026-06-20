@@ -6,6 +6,7 @@
 
 pub mod calibration;
 pub mod dynamics;
+pub mod hypotheses;
 pub mod metrics;
 pub mod observation;
 pub mod rules;
