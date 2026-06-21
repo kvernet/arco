@@ -13,6 +13,7 @@ serde = { version = "1", features = ["derive"] }
 bincode = { version = "2", features = ["derive"] }
 sha2 = "0.11"
 thiserror = "2"
+clap = { version = "4", features = ["derive"] }
 
 [profile.release]
 opt-level = 3
