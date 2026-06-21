@@ -14,6 +14,9 @@ use std::time::Instant;
 
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 
 use crate::calibration::calibrate;
 use crate::dynamics::{DEFAULT_SCHEDULE, generate_ensemble, test_boolean_function};
@@ -411,44 +414,76 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
     // ================================================================
     let storage_threshold = calibration.storage_threshold;
 
-    for (i, (rules, ratio)) in train_subsets.iter().enumerate() {
-        // Select initial states
-        let initial_states: Vec<BinaryGraphState> =
-            state_pool.iter().take(config.n_ensemble).cloned().collect();
+    // Pre-allocate for parallel collection
+    let mut results: Vec<UniverseResult> = (0..train_subsets.len())
+        .map(|_| UniverseResult {
+            universe_id: 0,
+            structured_ratio: 0.0,
+            n_rules: 0,
+            n_structured: 0,
+            rule_names: vec![],
+            persistence: 0.0,
+            storage: 0.0,
+            memory: 0.0,
+        })
+        .collect();
 
-        // Generate ensemble
-        let ensemble = generate_ensemble(
-            &initial_states,
-            rules,
-            config.steps,
-            config.n_ensemble,
-            config.window_size,
-            &DEFAULT_SCHEDULE,
-            &observe_windowed,
-            config.seed + i as u64 * 137,
-        );
+    results
+        .par_iter_mut()
+        .zip(train_subsets.par_iter())
+        .enumerate()
+        .for_each(|(i, (result, (rules, ratio)))| {
+            let mut local_rng = StdRng::seed_from_u64(config.seed + i as u64 * 137);
 
-        // Compute metrics
-        let storage = compute_storage(&ensemble, config.max_delta, config.n_shuffles, config.seed);
-        let memory = compute_memory(&ensemble, config.max_delta, config.n_shuffles, config.seed);
-        // Persistence at Δ=1 (documented as unreliable with small ensembles)
-        let persistence =
-            crate::metrics::compute_persistence(&ensemble, 1, config.n_shuffles, config.seed);
-
-        record.results.push(UniverseResult {
-            universe_id: i,
-            structured_ratio: *ratio,
-            n_rules: rules.len(),
-            n_structured: rules
+            let n_pool = state_pool.len();
+            let mut init_indices: Vec<usize> = (0..n_pool).collect();
+            for j in 0..config.n_ensemble {
+                let k = local_rng.random_range(j..n_pool);
+                init_indices.swap(j, k);
+            }
+            let initial_states: Vec<BinaryGraphState> = init_indices
                 .iter()
-                .filter(|r| r.rule_type() == "structured")
-                .count(),
-            rule_names: rules.iter().map(|r| r.name().to_string()).collect(),
-            persistence,
-            storage,
-            memory,
+                .take(config.n_ensemble)
+                .map(|&idx| state_pool[idx].clone())
+                .collect();
+
+            let ensemble = generate_ensemble(
+                &initial_states,
+                rules,
+                config.steps,
+                config.n_ensemble,
+                config.window_size,
+                &DEFAULT_SCHEDULE,
+                &observe_windowed,
+                config.seed + i as u64 * 137,
+            );
+
+            *result = UniverseResult {
+                universe_id: i,
+                structured_ratio: *ratio,
+                n_rules: rules.len(),
+                n_structured: rules
+                    .iter()
+                    .filter(|r| r.rule_type() == "structured")
+                    .count(),
+                rule_names: rules.iter().map(|r| r.name().to_string()).collect(),
+                persistence: crate::metrics::compute_persistence(
+                    &ensemble,
+                    1,
+                    config.n_shuffles,
+                    config.seed,
+                ),
+                storage: compute_storage(
+                    &ensemble,
+                    config.max_delta,
+                    config.n_shuffles,
+                    config.seed,
+                ),
+                memory: compute_memory(&ensemble, config.max_delta, config.n_shuffles, config.seed),
+            };
         });
-    }
+
+    record.results = results;
 
     // ================================================================
     // STEP 4: HYPOTHESIZE & TEST
