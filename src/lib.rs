@@ -5,6 +5,7 @@
 //! and learning emerge within arbitrary information systems.
 
 pub mod calibration;
+pub mod cycle;
 pub mod dynamics;
 pub mod hypotheses;
 pub mod metrics;

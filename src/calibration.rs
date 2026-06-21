@@ -29,6 +29,8 @@ use rand::rngs::StdRng;
 
 use crate::dynamics::{DEFAULT_SCHEDULE, generate_ensemble};
 use crate::metrics::{compute_memory, compute_persistence, compute_storage};
+use crate::rules::RewriteRule;
+use crate::rules::Rule;
 use crate::rules::create_destructive_rules;
 use crate::state::BinaryGraphState;
 
@@ -68,7 +70,12 @@ pub fn generate_null_trajectories<O: Clone>(
     let mut rng = StdRng::seed_from_u64(seed);
     let destructive_pool = create_destructive_rules();
 
-    // Generate a pool of random initial states
+    // Pre-filter scramblers to guarantee at least one per null universe
+    let scramblers: Vec<&RewriteRule> = destructive_pool
+        .iter()
+        .filter(|r| r.name().starts_with("DESTROY_SCRAMBLE_ALL"))
+        .collect();
+
     let state_pool: Vec<BinaryGraphState> = (0..n_ensemble * 2)
         .map(|_| BinaryGraphState::random(n_vertices, &mut rng))
         .collect();
@@ -78,9 +85,21 @@ pub fn generate_null_trajectories<O: Clone>(
     for i in 0..n_universes {
         let size = rng.random_range(1..=max_rules_per_subset);
         let mut rules = Vec::with_capacity(size);
-        for _ in 0..size {
+
+        // Always include at least one scrambler
+        let scrambler_idx = rng.random_range(0..scramblers.len());
+        rules.push(scramblers[scrambler_idx].clone());
+
+        // Fill remaining slots from the full destructive pool
+        for _ in 1..size {
             let idx = rng.random_range(0..destructive_pool.len());
             rules.push(destructive_pool[idx].clone());
+        }
+
+        // Shuffle
+        for j in (1..rules.len()).rev() {
+            let k = rng.random_range(0..=j);
+            rules.swap(j, k);
         }
 
         let initial_states: Vec<BinaryGraphState> =
