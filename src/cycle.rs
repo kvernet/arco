@@ -24,7 +24,6 @@ use crate::hypotheses::{
     Hypothesis, generate_standard_hypotheses, surviving_hypotheses, test_all_hypotheses,
 };
 use crate::metrics::{compute_memory, compute_storage};
-use crate::observation::observe_windowed;
 use crate::rules::{
     RewriteRule, Rule, create_destructive_rules, create_structured_rules,
     generate_mixed_rule_subsets,
@@ -345,6 +344,10 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
 
     let mut rng = StdRng::seed_from_u64(config.seed);
 
+    let state_obs = crate::observation::get_state_observer(&config.obs_name)
+        .unwrap_or(&crate::observation::observe_full_state);
+    let obs_fn = |window: &[BinaryGraphState]| -> Vec<u8> { state_obs(window.last().unwrap()) };
+
     // ================================================================
     // STEP 1: GENERATE
     // ================================================================
@@ -392,7 +395,7 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
         config.steps,
         config.window_size,
         5, // max_rules_per_subset
-        &observe_windowed,
+        &obs_fn,
         95.0,
         config.max_delta,
         config.n_shuffles,
@@ -454,7 +457,7 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
                 config.n_ensemble,
                 config.window_size,
                 &DEFAULT_SCHEDULE,
-                &observe_windowed,
+                &obs_fn,
                 config.seed + i as u64 * 137,
             );
 
@@ -503,7 +506,7 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
             config.n_ensemble,
             config.window_size,
             &DEFAULT_SCHEDULE,
-            &observe_windowed,
+            &obs_fn,
             config.seed + 10000 + test_data.len() as u64 * 137,
         );
 

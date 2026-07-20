@@ -2,11 +2,9 @@
 
 # Mathematical Constitution
 
-## Experimental Validation
-
 ---
 
-> *This document defines the mathematical objects, operations, and criteria that constitute ARCO.*
+> *This document defines the mathematical objects, operations, and criteria that constitute ARCO. It is a stable specification. Experimental findings are reported in the project [README](https://github.com/kvernet/arco) and associated publications.*
 
 ---
 
@@ -28,15 +26,11 @@ Before defining what ARCO is, we define how it can fail. These conditions are de
 
 **Statement**: No known computational system scores above threshold on ARCO's emergence metrics.
 
-**Status**: Not triggered. Storage detected in 60.7% of spectrum universes in the Python reference. All five basic Boolean functions (NAND, AND, OR, NOR, XOR) rediscovered. Confirmed in Rust implementation at n=50,000 (43.2% storage rate, 94.3% structured storage).
-
 ---
 
 ## F-2: The Triviality Condition
 
 **Statement**: Every invariant discovered by ARCO is a logical consequence of the resource algebra or state space axioms alone.
-
-**Status**: Not yet testable. Awaiting invariant discovery infrastructure.
 
 ---
 
@@ -44,15 +38,11 @@ Before defining what ARCO is, we define how it can fail. These conditions are de
 
 **Statement**: Every universe ARCO discovers is bisimilar to a known computational model in the Taxonomy.
 
-**Status**: Not triggered. The Binary Graph Universe was designed to rediscover known models, not novel ones. This condition applies when ARCO searches for novel computation.
-
 ---
 
 ## F-4: The Scalability Condition
 
 **Statement**: ARCO's search procedure cannot explore state spaces beyond size $10^3$ within reasonable resources.
-
-**Status**: Not triggered. Python reference processes 300 universes in ~36 seconds. Rust implementation processes 50,000 universes in ~7 minutes on 20 cores (110 universes/second), demonstrating linear scaling.
 
 ---
 
@@ -60,23 +50,17 @@ Before defining what ARCO is, we define how it can fail. These conditions are de
 
 **Statement**: Any emergence metric requires computing a quantity that is provably uncomputable.
 
-**Status**: Not triggered. All metrics are computable (shuffle-corrected plugin NMI, total variation distance).
-
 ---
 
 ## F-6: The Disconfirmation Condition
 
 **Statement**: No predictive laws of the form "Condition A ∧ Condition B ⇒ Emergent Property C" generalize to unseen universes.
 
-**Status**: Not triggered. Four hypotheses survived cross-validation in both Python and Rust implementations. The Transport Law (H5) achieved 91.2% accuracy in the Python reference and ~53-61% accuracy at n=50,000 in Rust. The Logic Gate Law (H3), Majority Structure Law (H2), and Multiple Logic Law (H7) also survive at all scales.
-
 ---
 
 ## F-7: The Overfitting Condition
 
 **Statement**: Surviving hypotheses have complexity exceeding a threshold relative to their predictive accuracy.
-
-**Status**: Not triggered. Surviving hypotheses have complexity ≤ 2.0 and accuracy ≥ 52.7%, yielding positive scores after the MDL penalty across all experimental scales.
 
 ---
 
@@ -100,8 +84,6 @@ where:
 - $\mathcal{R}$ = resource constraints
 - $\mathcal{I}$ = invariant structure
 - $\mathcal{K}$ = update schedule
-
-*The schedule $\mathcal{K}$ determines which transformations apply when, and is not reducible to the transformation set. Changing the schedule from random-vertex to all-vertices altered persistence from 0% to 97.7% in experiments.*
 
 ---
 
@@ -156,8 +138,8 @@ $\mathcal{T}$ must form a **semigroup under composition**: for $\tau_1, \tau_2 \
 Rules are classified along two axes:
 
 **Semantic type**:
-- `structured`: semantically meaningful, information-processing operations (logic gates, transport, identity).
-- `destructive`: entropy-increasing operations for null-distribution calibration. Not "random" — they are deliberately biased toward information destruction.
+- `structured`: semantically meaningful, information-processing operations.
+- `destructive`: entropy-increasing operations for null-distribution calibration. Deliberately biased toward information destruction.
 
 **Locality class**:
 - *Pointwise*: affects only the target vertex.
@@ -193,9 +175,7 @@ where $\mathcal{Y}$ is an observation space. Observation values must be hashable
 
 ### 1.4.3 Axiom: Dynamic Sufficiency
 
-An observation set $\mathcal{O}$ is **dynamically sufficient** for $\mathcal{T}$ if replacing $\mathcal{O}$ with the identity observation (canonical encoding) does not qualitatively change emergence metric values. If a coarser observation yields zero metrics while the identity observation yields nonzero metrics, $\mathcal{O}$ is insufficient.
-
-**Experimental basis**: `observe_root_label` (single vertex) yielded zero persistence in early experiments. `observe_label_vector` (full label tuple) and `observe_compound` (labels + edges) yielded the storage spectrum.
+An observation set $\mathcal{O}$ is **dynamically sufficient** for $\mathcal{T}$ if replacing $\mathcal{O}$ with the identity observation does not qualitatively change emergence metric values. A coarser observation that yields zero metrics while the identity observation yields nonzero metrics is insufficient.
 
 ---
 
@@ -229,10 +209,8 @@ $\mathcal{K}$ specifies the order and selection of transformations at each times
 
 ### 1.7.2 Schedule Classification
 
-Schedules are classified along two axes:
-
-- **Timing**: *synchronous* (all updates computed from the same pre-timestep state) vs *asynchronous* (updates immediately visible to later operations within the same timestep).
-- **Selection**: *exhaustive* (every update site visited once), *stochastic* (sites sampled probabilistically), or *priority* (sites ordered by a fixed criterion).
+- **Timing**: *synchronous* vs *asynchronous*
+- **Selection**: *exhaustive*, *stochastic*, or *priority*
 
 ### 1.7.3 Standard Schedules
 
@@ -240,7 +218,13 @@ Schedules are classified along two axes:
 |----------|--------|-----------|-------------|
 | All-vertices | Asynchronous | Exhaustive | Every vertex updated once per timestep in random order; first matching rule fires; later vertices see earlier updates |
 
-The all-vertices schedule was used in all Binary Graph Universe experiments. Rule ordering is randomized per vertex, making rule competition probabilistic even with deterministic rules.
+---
+
+## 1.8 Validation Substrates and Discovery Substrates
+
+The Binary Graph Universe shipped with ARCO is a **validation substrate**: it uses hand-coded computational primitives (logic gates, transport rules) with human-assigned semantic labels to verify that ARCO's metrics, calibration, and hypothesis-testing pipeline function correctly. This is analogous to using a known chemical reaction to calibrate a spectrometer.
+
+Validation substrates do not violate Computational Neutrality because the *framework* (Information Universes, emergence metrics, calibrated thresholds) is paradigm-neutral. The *current universe instance* uses known primitives as a bootstrap. Future **discovery substrates** will generate rules without human semantic labels, requiring ARCO to identify computational structure without knowing what "NAND" or "PROPAGATE" means in advance.
 
 ---
 
@@ -266,7 +250,7 @@ $$
 \end{array}
 $$
 
-*"Persistent Universe" is not included in the hierarchy. Step-to-step persistence (Δ=1) is not reliably measurable with current ensemble sizes and estimators. Storage (maximum persistence across all Δ) is the primary emergence signal.*
+Step-to-step persistence ($\Delta=1$) is not included in the hierarchy. It is not reliably measurable with current ensemble sizes. Storage (maximum persistence across all $\Delta$) is the primary emergence signal.
 
 ---
 
@@ -278,17 +262,13 @@ $$
 \text{Store}(\mathcal{U}) > \theta_{\text{stor}}
 $$
 
-where storage is the maximum shuffle-corrected NMI across all timescales Δ ∈ [1, Δ_max], computed using **pooled estimation** (all timesteps and ensemble members pooled before MI computation).
-
-**Experimental basis**: Storage was the primary discriminating metric in the Binary Graph Universe spectrum, ranging from ~18% (Noise) to ~95% (Structured) across both Python and Rust implementations at scales up to n=50,000.
+where storage is the maximum shuffle-corrected NMI across all timescales $\Delta \in [1, \Delta_{\text{max}}]$, computed using pooled estimation.
 
 ---
 
 ## 2.2 Memory Universe
 
-A universe exhibits **memory** if it exhibits storage. Memory is the capacity to preserve information about past observations such that it can be recovered later — which is exactly what storage measures via $I(O_t; O_{t+\Delta})$.
-
-*Memory was previously defined as trajectory separation (distinguishability of futures given different initial conditions). That metric measures sensitivity to initial conditions, not memory. Trajectory separation is preserved as a diagnostic metric but is not memory.*
+A universe exhibits **memory** if it exhibits storage. Memory is the capacity to preserve information about past observations such that it can be recovered later — measured via $I(O_t; O_{t+\Delta})$.
 
 ---
 
@@ -298,15 +278,11 @@ A universe exhibits **memory** if it exhibits storage. Memory is the capacity to
 
 ## 3.1 Ensemble Requirement
 
-All emergence metrics must be computed over ensembles of trajectories from distinct initial conditions.
-
-An **ensemble** is a set of $n$ trajectories generated from distinct initial states. The minimum $n$ depends on the observation space cardinality and the effect size being measured. For the Binary Graph Universe with compound observation, $n = 10$ was sufficient for storage detection with pooled estimation.
+All emergence metrics are computed over ensembles of $n \ge 2$ trajectories from distinct initial states.
 
 ---
 
 ## 3.2 Shuffle-Corrected Normalized Mutual Information
-
-All MI-based metrics must use bias correction via temporal shuffling.
 
 $$
 \text{NMI}_{\text{corr}}(X, Y) = \text{NMI}(X, Y) - \mathbb{E}[\text{NMI}(X, Y_{\text{shuf}})]
@@ -314,9 +290,7 @@ $$
 
 where $Y_{\text{shuf}}$ is $Y$ with temporal order randomly permuted. The expectation is over $k \ge 5$ shuffles. The result is clamped to $[0, 1]$.
 
-**Experimental basis**: Raw NMI gave a null-distribution mean of ~0.89 for destructive rule sets. Shuffle correction reduced this to ~0.00, restoring proper discrimination between structured and destructive universes.
-
-**Limitation**: Global shuffling assumes no long-range temporal autocorrelation in the null distribution. For periodic or strongly autocorrelated systems, use block shuffling or circular phase randomization.
+**Limitation**: The plugin MI estimator has known small-sample bias when the observation alphabet is large relative to sample size. Shuffle correction subtracts the mean baseline but does not eliminate all bias. Global shuffling assumes no long-range temporal autocorrelation in the null distribution.
 
 ---
 
@@ -329,9 +303,7 @@ $$
 \right)}
 $$
 
-Storage uses **pooled estimation**: all observation pairs from all ensemble members and all timesteps are pooled into two vectors before computing NMI. This gives the estimator sufficient samples to distinguish signal from shuffle baseline.
-
-*Per-timestep averaging was found to be unreliable with small ensembles (n=10). Pooled estimation is the canonical method for storage.*
+Storage uses **pooled estimation**: all observation pairs from all ensemble members and all timesteps are pooled before computing NMI.
 
 ---
 
@@ -344,21 +316,19 @@ $$
 \right)}
 $$
 
-Persistence is the per-timestep average of ensemble NMI. For Δ=1 with small ensembles (n=10), the per-timestep estimator rarely exceeds the shuffle baseline. **Persistence at Δ=1 is not a reliable emergence indicator at current ensemble sizes.** Use storage instead.
-
-*Persistence is documented as requiring larger ensembles (n ≥ 50) or a different estimator to be reliable. It is preserved for completeness and for use with larger-scale experiments.*
+Per-timestep persistence at $\Delta=1$ with small ensembles rarely exceeds the shuffle baseline. Use storage instead.
 
 ---
 
 ## 3.5 Memory
 
-Memory is an alias for storage. See Section 2.2.
+Memory is an alias for storage.
 
 ---
 
 ## 3.6 Trajectory Separation (Diagnostic)
 
-Trajectory separation measures how distinguishable futures are given different initial conditions, using total variation distance between conditional output distributions. High values indicate sensitivity to initial conditions, **not memory**. This metric is preserved for diagnostic purposes.
+Measures distinguishability of futures given different initial conditions via total variation distance. High values indicate sensitivity to initial conditions, **not memory**. Preserved for diagnostic use.
 
 ---
 
@@ -379,7 +349,7 @@ A universe is **computational** if and only if it satisfies:
 A candidate universe must satisfy at least one of:
 
 - **D1**: Novel representation efficiency.
-- **D2**: Novel computational organization (primitives, tradeoffs, invariants, composition).
+- **D2**: Novel computational organization.
 - **D3**: Novel error resilience.
 - **D4**: Novel universality.
 - **D5**: Novel invariant.
@@ -392,7 +362,7 @@ A candidate universe must satisfy at least one of:
 
 ## 6.1 The Taxonomy
 
-A versioned, peer-reviewed catalogue of known computational models. The current version includes finite automata, Turing machines, Boolean circuits, quantum circuits, cellular automata, neural networks, rewriting systems, lambda calculi, and categorical quantum mechanics models.
+A versioned catalogue of known computational models including finite automata, Turing machines, Boolean circuits, quantum circuits, cellular automata, neural networks, rewriting systems, lambda calculi, and categorical quantum mechanics models.
 
 ---
 
@@ -408,7 +378,7 @@ $$
 \mathcal{G}: \Theta \to \mathbb{U}
 $$
 
-Generator classes include grammar, categorical, rewrite, evolutionary, constraint, random, compositional, and mixed generators. The generator parameter space $\Theta$ is itself searchable (meta-search).
+Generator classes include grammar, categorical, rewrite, evolutionary, constraint, random, compositional, and mixed generators. The generator parameter space $\Theta$ is itself searchable.
 
 ---
 
@@ -422,18 +392,12 @@ GENERATE → CALIBRATE → OBSERVE → HYPOTHESIZE → PREDICT → TEST → REVI
 
 ## 8.1 Threshold Calibration
 
-Thresholds are calibrated per universe class.
-
 **Procedure**:
 
-1. Generate $m \ge 30$ null universes using purely destructive rule sets, each guaranteed to contain at least one information-scrambling rule.
+1. Generate $m \ge 30$ null universes using purely destructive rule sets, each containing at least one information-scrambling rule.
 2. Compute the emergence metric for each null universe.
 3. Set threshold $\theta$ to the 95th percentile of the null distribution.
-4. Apply engineering floors (minimum thresholds) to prevent degenerate cases. These floors are safeguards against statistical artifacts, not scientific priors.
-
-The calibration returns null distribution statistics (mean, standard deviation) and an empirical p-value function for effect size estimation.
-
-**Experimental basis**: Degenerate null universes (e.g., two DESTROY_ZERO rules producing a constant state) were found to inflate the null distribution. Forcing at least one SCRAMBLE_ALL rule per null universe resolved this.
+4. Apply engineering floors to prevent degenerate cases.
 
 ---
 
@@ -464,105 +428,26 @@ where $\lambda = 0.1$. A hypothesis **survives** if $\text{Score}(H) > 0$ and $\
 
 ---
 
-# Part Ten: Discovered Laws
+# Part Ten: Meta-Theorems
 
-*Laws that have survived cross-validation in both the Python reference and Rust implementations.*
-
----
-
-## Law 1: The Transport Law
-
-**Statement**: Rule sets containing information transport operations (PROPAGATE, SWAP, COPY_TO_OUT, COPY_FROM_IN) exhibit storage at significantly higher rates than those without.
-
-**Evidence**:
-- Python reference (n=300): 91.2% accuracy, score 0.812
-- Rust implementation (n=50,000): ~53-61% accuracy, score 0.43-0.51
-- Status: **SURVIVED** across all experimental scales
-
-**Interpretation**: Transport rules create persistent correlations and delayed dependencies across the graph, enabling information to survive multiple timesteps. This is the strongest and most replicated finding in ARCO.
+ARCO discovers not only regularities about universes but regularities about discovery. Meta-hypotheses concern the generator parameter space, the effectiveness of inductive biases, and the predictive power of different metrics.
 
 ---
 
-## Law 2: The Logic Gate Law
+# Part Eleven: Inductive Biases
 
-**Statement**: Rule sets containing at least one logic gate (NAND, NOR, AND, OR, XOR, NOT) exhibit memory above threshold.
-
-**Evidence**:
-- Python reference (n=300): 76.9% accuracy, score 0.619
-- Rust implementation (n=50,000): ~53% accuracy, score 0.38-0.41
-- Status: **SURVIVED**
+Configurable biases guide the search: locality, compositionality, stability, and resource monotonicity. The set of active biases is itself searchable.
 
 ---
 
-## Law 3: The Majority Structure Law
-
-**Statement**: Rule sets where the majority of rules are structured exhibit memory above threshold.
-
-**Evidence**:
-- Python reference (n=300): 84.5% accuracy, score 0.695
-- Rust implementation (n=50,000): ~62-64% accuracy, score 0.47-0.49
-- Status: **SURVIVED**
-
----
-
-## Law 4: The Multiple Logic Law
-
-**Statement**: Rule sets containing at least two logic gates exhibit memory above threshold.
-
-**Evidence**:
-- Python reference (n=300): 84.6% accuracy, score 0.646
-- Rust implementation (n=50,000): ~56-63% accuracy, score 0.36-0.43
-- Status: **SURVIVED**
-
----
-
-## Law 5: The Structure-Storage Gradient
-
-**Statement**: The probability that a universe exhibits storage increases monotonically with the fraction of structured rules.
-
-**Evidence (Rust implementation, n=50,000)**:
-
-| Structured Ratio | Storage Above Threshold |
-|------------------|------------------------|
-| 0.00 – 0.15 | ~18% |
-| 0.15 – 0.40 | ~16% |
-| 0.40 – 0.60 | ~26% |
-| 0.60 – 0.85 | ~40% |
-| 0.85 – 1.00 | **~95%** |
-
----
-
-## Negative Results
-
-The following hypotheses were tested and **failed**:
-
-- **H1 (Has structured rule → persistence)**: The presence of a single structured rule is insufficient to guarantee emergence.
-- **H4 (All structured → persistence)**: Even fully-structured rule sets often fail to produce detectable persistence. This is a constraint on any theory of emergent computation.
-- **H6 (All destructive → persistence)**: Correctly fails — validates the null distribution calibration.
-- **H8 (Mixed rules → persistence)**: The condition (0.3 < ratio < 0.7) is too broad or persistence is the wrong metric.
-
----
-
-# Part Eleven: Meta-Theorems
-
-ARCO discovers not only laws about universes but laws about discovery. Meta-hypotheses concern the generator parameter space $\Theta$, the effectiveness of inductive biases, and the predictive power of different metrics.
-
----
-
-# Part Twelve: Inductive Biases
-
-Configurable biases guide the search: locality, compositionality, stability, and resource monotonicity. The set of active biases is itself searchable (bias variation meta-search).
-
----
-
-# Part Thirteen: The Hierarchical Search Space
+# Part Twelve: The Hierarchical Search Space
 
 ```
 Level 0: INFORMATION UNIVERSES
 Level 1: STRUCTURED INFORMATION UNIVERSES
 Level 2: INFORMATION-BEARING UNIVERSES
 Level 3: STORAGE UNIVERSES
-Level 4: MEMORY UNIVERSES (= STORAGE)
+Level 4: MEMORY UNIVERSES
 Level 5: COMPUTATIONAL UNIVERSES
 Level 6: UNIVERSAL COMPUTATIONAL UNIVERSES
 Level 7: NOVEL COMPUTATIONAL UNIVERSES
@@ -570,7 +455,7 @@ Level 7: NOVEL COMPUTATIONAL UNIVERSES
 
 ---
 
-# Part Fourteen: What ARCO Is Not
+# Part Thirteen: What ARCO Is Not
 
 - Not a proposal to build a better computer.
 - Not an attempt to discover practical algorithms.
@@ -579,18 +464,11 @@ Level 7: NOVEL COMPUTATIONAL UNIVERSES
 - Not an attempt to simulate physical reality.
 - Not a theory of everything.
 
-ARCO is a precisely scoped scientific instrument for exploring the space of possible information universes, discovering the conditions under which computation emerges, and identifying genuinely novel computational structures and the laws that govern them.
+ARCO is a precisely scoped scientific instrument for exploring the space of possible information universes and discovering the conditions under which computation emerges.
 
 ---
 
-# Part Fifteen: Implementations
+# Part Fourteen: Implementations
 
-## Python Reference
-
-The Python reference implementation (`arco` package, Python 3.10+) first validated every definition in this Constitution. It reproduces all five discovered laws, the Structure-Storage Gradient, and Boolean rediscovery.
-
-## Rust Production Implementation
-
-The Rust crate (`arco` on crates.io, v0.2+) provides a parallelized, high-performance implementation capable of processing 50,000 universes in ~7 minutes on 20 cores. It reproduces all four surviving hypotheses and the Structure-Storage Gradient, confirming the methodology generalizes across independent implementations.
-
----
+- **Python reference** ([arco-python](https://github.com/kvernet/arco-python)): First validated the methodology.
+- **Rust production** ([arco](https://crates.io/crates/arco)): Parallelized, high-performance implementation. Experimental findings are reported in the [project README](https://github.com/kvernet/arco).
