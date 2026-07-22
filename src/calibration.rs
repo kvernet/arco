@@ -102,8 +102,18 @@ pub fn generate_null_trajectories<O: Clone>(
             rules.swap(j, k);
         }
 
-        let initial_states: Vec<BinaryGraphState> =
-            state_pool.iter().take(n_ensemble).cloned().collect();
+        // Select random initial states for this null universe
+        let n_pool = state_pool.len();
+        let mut init_indices: Vec<usize> = (0..n_pool).collect();
+        for j in 0..n_ensemble {
+            let k = rng.random_range(j..n_pool);
+            init_indices.swap(j, k);
+        }
+        let initial_states: Vec<BinaryGraphState> = init_indices
+            .iter()
+            .take(n_ensemble)
+            .map(|&idx| state_pool[idx].clone())
+            .collect();
 
         let ensemble = generate_ensemble(
             &initial_states,

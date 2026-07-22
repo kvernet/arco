@@ -19,6 +19,7 @@
 use std::fmt;
 
 use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -160,7 +161,7 @@ pub static DEFAULT_SCHEDULE: AllVerticesSchedule = AllVerticesSchedule;
 /// * `steps` — Number of timesteps to simulate.
 /// * `window_size` — Window size
 /// * `schedule` — The update schedule.
-/// * `obs_fn` — Observation operator `(BinaryGraphState) -> O`.
+/// * `obs_fn` — Observation operator `(&[BinaryGraphState]) -> O`.
 /// * `seed` — Seed for the per-trajectory RNG.
 ///
 /// # Returns
@@ -212,7 +213,7 @@ pub fn generate_trajectory<O>(
 /// * `n_ensemble` — Number of trajectories to generate (≥ 2).
 /// * `window_size` — Window size
 /// * `schedule` — The update schedule.
-/// * `obs_fn` — Observation operator `(BinaryGraphState) -> O`.
+/// * `obs_fn` — Observation operator `(&[BinaryGraphState]) -> O`.
 /// * `base_seed` — Base seed. Trajectory `i` uses seed
 ///   `base_seed + i * 137`.
 ///
@@ -244,10 +245,18 @@ pub fn generate_ensemble<O: Clone>(
 
     let mut trajectories = Vec::with_capacity(n_ensemble);
 
+    // Shuffle initial states to avoid bias from non-random ordering
+    let mut rng = StdRng::seed_from_u64(base_seed);
+    let mut indices: Vec<usize> = (0..initial_states.len()).collect();
+    for i in 0..n_ensemble {
+        let j = rng.random_range(i..initial_states.len());
+        indices.swap(i, j);
+    }
+
     for i in 0..n_ensemble {
         let seed = base_seed + i as u64 * 137;
         let traj = generate_trajectory(
-            &initial_states[i],
+            &initial_states[indices[i]],
             rules,
             steps,
             window_size,
@@ -262,7 +271,7 @@ pub fn generate_ensemble<O: Clone>(
 }
 
 // ===================================================================
-// Boolean function testing (computational rediscovery)
+// Boolean function testing (computational verification)
 // ===================================================================
 
 /// Test whether a rule set implements a 2-input Boolean function.
@@ -275,8 +284,10 @@ pub fn generate_ensemble<O: Clone>(
 /// trials per combination. Majority vote determines the output for
 /// each input pair.
 ///
-/// This function operationalizes the computational rediscovery
-/// milestone (Constitution).
+/// This function operationalizes the computational verification
+/// milestone (Constitution). It validates that hand-coded logic
+/// gates function correctly under stochastic scheduling, not that
+/// they were discovered without human labeling.
 ///
 /// # Parameters
 /// * `rules` — The rule set to test.

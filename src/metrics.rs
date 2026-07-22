@@ -247,14 +247,12 @@ pub fn compute_persistence_multiscale<T: Eq + Hash + Clone>(
         .collect()
 }
 
-/// Storage: maximum persistence across all timescales.
+/// Storage: maximum shuffle-corrected NMI across all timescales.
 ///
 /// Uses pooled estimation: all observation pairs from all ensemble
 /// members and all timesteps are pooled before computing NMI. This
 /// gives the estimator sufficient samples to distinguish signal
 /// from shuffle baseline.
-///
-/// Per Constitution.
 pub fn compute_storage<T: Eq + Hash + Clone>(
     trajectories: &[Vec<T>],
     max_delta: usize,
@@ -290,12 +288,16 @@ pub fn compute_storage<T: Eq + Hash + Clone>(
     best
 }
 
-/// Memory: information about past observations remains recoverable.
+/// Memory: recoverable information about the past.
 ///
-/// Alias for `compute_storage`. Memory is the capacity of a system
-/// to preserve information about its past such that it can be
-/// recovered later — which is exactly what storage measures via
-/// I(O_t; O_{t+Δ}).
+/// Alias for `compute_storage`. In ARCO, memory is quantified as
+/// delayed mutual information I(O_t; O_{t+Δ}), maximized over Δ.
+/// This measures how much information survives over time.
+///
+/// Note: This is not the same as "active information storage"
+/// (Lizier et al.), which conditions on the entire past history
+/// rather than a single past observation. ARCO's definition is
+/// intentionally simpler and computable from finite ensembles.
 ///
 /// Per Constitution.
 pub fn compute_memory<T: Eq + Hash + Clone>(
@@ -307,20 +309,26 @@ pub fn compute_memory<T: Eq + Hash + Clone>(
     compute_storage(trajectories, max_delta, n_shuffles, seed)
 }
 
-/// Trajectory separation: how distinguishable are futures given
-/// different initial conditions?
+/// Initial condition separation: how distinguishable are futures
+/// given different initial states?
 ///
-/// Measures total variation distance between conditional output
-/// distributions. High values indicate sensitivity to initial
-/// conditions — NOT memory.
+/// For each pair of distinct initial observations (at t=0), computes
+/// the total variation distance between their conditional output
+/// distributions after Δ steps. High values mean different initial
+/// states produce distinguishable futures.
 ///
-/// # Warning
+/// This measures sensitivity to initial conditions — NOT memory.
+/// A chaotic deterministic system can score high even if it
+/// preserves no recoverable information about the past.
 ///
-/// This metric may be confused as "memory". It is NOT memory.
-/// A chaotic system with no information preservation can
-/// score high. Use `compute_memory` for actual memory measurement.
-/// This metric is preserved for diagnostic purposes.
-pub fn compute_trajectory_separation<T: Eq + Hash + Clone>(
+/// # Limitation
+///
+/// This metric only conditions on the first observation (`traj[0]`),
+/// not on every intermediate state. For non-stationary dynamics,
+/// consider conditioning on multiple timepoints.
+///
+/// Preserved for diagnostic use alongside `compute_memory`.
+pub fn compute_initial_condition_separation<T: Eq + Hash + Clone>(
     trajectories: &[Vec<T>],
     max_delta: usize,
 ) -> f64 {
@@ -462,11 +470,11 @@ mod tests {
     }
 
     #[test]
-    fn test_trajectory_separation_low_for_identical_trajectories() {
+    fn test_initial_condition_separation_low_for_identical_trajectories() {
         let traj1 = vec![0, 1, 0, 1, 0];
         let traj2 = vec![0, 1, 0, 1, 0];
         let trajectories = vec![traj1, traj2];
-        let sep = compute_trajectory_separation(&trajectories, 3);
+        let sep = compute_initial_condition_separation(&trajectories, 3);
         // Same trajectories should have 0 separation
         assert!(
             sep < 0.01,

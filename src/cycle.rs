@@ -189,7 +189,7 @@ impl ResearchRecord {
 
         if !self.boolean_discoveries.is_empty() {
             lines.push(String::new());
-            lines.push("Boolean functions rediscovered:".to_string());
+            lines.push("Boolean functions validated:".to_string());
             let mut gates: Vec<(&String, &usize)> = self.boolean_discoveries.iter().collect();
             gates.sort_by(|a, b| a.0.cmp(b.0));
             for (gate, count) in gates {
@@ -310,8 +310,9 @@ impl Default for CycleConfig {
 /// 2. CALIBRATE — compute thresholds from destructive null
 /// 3. OBSERVE — compute emergence metrics on all universes
 /// 4. HYPOTHESIZE & TEST — evaluate hypotheses on held-out data
-/// 5. REVISE — check failure conditions, compile spectrum,
-///    test Boolean rediscovery, report surviving laws
+/// 5. VALIDATE — test Boolean validation
+/// 6. REVISE — check failure conditions, compile spectrum,
+///    report surviving laws
 pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
     let t0 = Instant::now();
     let mut record = ResearchRecord::new();
@@ -495,9 +496,20 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
 
     // Prepare test data
     let mut test_data = Vec::new();
-    for (rules, _ratio) in &test_subsets {
-        let initial_states: Vec<BinaryGraphState> =
-            state_pool.iter().take(config.n_ensemble).cloned().collect();
+    for (i, (rules, _ratio)) in test_subsets.iter().enumerate() {
+        let mut local_rng = StdRng::seed_from_u64(config.seed + 10000 + i as u64 * 137);
+
+        let n_pool = state_pool.len();
+        let mut init_indices: Vec<usize> = (0..n_pool).collect();
+        for j in 0..config.n_ensemble {
+            let k = local_rng.random_range(j..n_pool);
+            init_indices.swap(j, k);
+        }
+        let initial_states: Vec<BinaryGraphState> = init_indices
+            .iter()
+            .take(config.n_ensemble)
+            .map(|&idx| state_pool[idx].clone())
+            .collect();
 
         let ensemble = generate_ensemble(
             &initial_states,
@@ -507,7 +519,7 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
             config.window_size,
             &DEFAULT_SCHEDULE,
             &obs_fn,
-            config.seed + 10000 + test_data.len() as u64 * 137,
+            config.seed + 10000 + i as u64 * 137,
         );
 
         test_data.push((rules.as_slice(), ensemble));
@@ -549,7 +561,7 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
     record.hypotheses = hypotheses.iter().map(HypothesisRecord::from).collect();
 
     // ================================================================
-    // STEP 5: BOOLEAN REDISCOVERY
+    // STEP 5: BOOLEAN VALIDATION
     // ================================================================
     let target_functions: HashMap<&str, TruthTable> = HashMap::from([
         (
@@ -600,7 +612,7 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
     if nand_count == 0 {
         record
             .failure_conditions
-            .push("F-1 (NULL): NAND not rediscovered.".to_string());
+            .push("F-1 (NULL): NAND not validated.".to_string());
     }
 
     let surviving = surviving_hypotheses(&hypotheses);
