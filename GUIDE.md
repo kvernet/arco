@@ -1112,8 +1112,8 @@ for h in &record.hypotheses {
     }
 }
 
-// Boolean discoveries
-for (gate, count) in &record.boolean_discoveries {
+// Boolean validation
+for (gate, count) in &record.boolean_validation {
     println!("{}: {} universes", gate, count);
 }
 ```

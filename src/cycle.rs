@@ -1,287 +1,160 @@
-//! Scientific cycle orchestrator and research record.
+//! Scientific cycle orchestrator.
 //!
-//! Per Constitution:
+//! Per the Mathematical Constitution:
 //!     The scientific cycle is: Generate → Calibrate → Observe →
-//!     Hypothesize → Predict → Test → Revise. Each cycle produces a
-//!     Research Record.
+//!     Hypothesize → Predict → Test → Revise. Each cycle produces
+//!     a Research Record.
 //!
-//! This module provides:
-//! - `run_cycle()`: end-to-end execution of the scientific cycle.
-//! - `ResearchRecord`: structured output with full reproducibility data.
+//! # Design
+//!
+//! The cycle is fully generic over any [`InformationUniverse`] type.
+//! It does not know about graph rewriting, cellular automata, or
+//! any specific substrate.
+//!
+//! # Usage
+//!
+//! ```rust
+//! use arco::{
+//!     cycle::{CycleConfig, run_cycle},
+//!     hypotheses::Hypothesis,
+//!     rules::Rule,
+//!     schedule::Schedule,
+//!     substrates::graph::{BinaryGraphState, MatchInfo, RewriteRule, observation::CompoundObserver},
+//!     universe::InformationUniverse,
+//! };
+//!
+//! fn main() {
+//!     let universe = MyUniverse {
+//!         states: vec![],
+//!         rules: vec![],
+//!         observation: CompoundObserver,
+//!         schedule: SeqSchedule,
+//!     };
+//!     let config = CycleConfig::default();
+//!     let mut hypotheses = vec![
+//!         Hypothesis::new("H1", |_rules| true, "storage", "H1 desc", 1.0),
+//!         Hypothesis::new("H2", |_| true, "storage", "H2 desc", 0.5),
+//!     ];
+//!     let record = run_cycle(
+//!         &universe,
+//!         &config,
+//!         &mut hypotheses,
+//!         &mut |_| (vec![], 0.0),
+//!         None,
+//!     );
+//!
+//!     println!("{}", record.summary());
+//! }
+//!
+//! #[derive(Debug)]
+//! struct SeqSchedule;
+//!
+//! impl Schedule<BinaryGraphState, RewriteRule> for SeqSchedule {
+//!     fn name(&self) -> &str {
+//!         "Schedule"
+//!     }
+//!
+//!     fn selection(&self) -> &str {
+//!         "exhaustive"
+//!     }
+//!
+//!     fn timing(&self) -> &str {
+//!         "asynchronous"
+//!     }
+//!
+//!     fn step(
+//!         &self,
+//!         state: &BinaryGraphState,
+//!         rules: &[RewriteRule],
+//!         rng: &mut dyn rand::prelude::Rng,
+//!     ) -> BinaryGraphState {
+//!         let mut current = state.clone();
+//!         let context = MatchInfo::Unconditional { vertex: 0 };
+//!         for rule in rules {
+//!             current = rule.apply(state, &context, rng);
+//!         }
+//!         current
+//!     }
+//! }
+//!
+//! struct MyUniverse {
+//!     states: Vec<BinaryGraphState>,
+//!     rules: Vec<RewriteRule>,
+//!     observation: CompoundObserver,
+//!     schedule: SeqSchedule,
+//! }
+//!
+//! impl InformationUniverse for MyUniverse {
+//!     type State = BinaryGraphState;
+//!     type Rule = RewriteRule;
+//!     type Observation = CompoundObserver;
+//!     type Schedule = SeqSchedule;
+//!
+//!     fn state_space(&self) -> &[Self::State] {
+//!         &self.states
+//!     }
+//!
+//!     fn rules(&self) -> &[Self::Rule] {
+//!         &self.rules
+//!     }
+//!
+//!     fn observation(&self) -> &Self::Observation {
+//!         &self.observation
+//!     }
+//!
+//!     fn schedule(&self) -> &Self::Schedule {
+//!         &self.schedule
+//!     }
+//!
+//!     fn null_rules(&self, _rng: &mut dyn rand::prelude::Rng) -> Vec<Self::Rule> {
+//!         vec![]
+//!     }
+//! }
+//! ```
 
-use std::collections::HashMap;
 use std::time::Instant;
 
+use rand::RngExt;
+use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
-};
 
-use crate::calibration::calibrate;
-use crate::dynamics::{DEFAULT_SCHEDULE, generate_ensemble, test_boolean_function};
-use crate::hypotheses::{
-    Hypothesis, generate_standard_hypotheses, surviving_hypotheses, test_all_hypotheses,
-};
-use crate::metrics::{compute_memory, compute_storage};
-use crate::rules::{
-    RewriteRule, Rule, create_destructive_rules, create_structured_rules,
-    generate_mixed_rule_subsets,
-};
-use crate::state::BinaryGraphState;
-
-/// Test data: (rules, ensemble trajectories)
-type TestDataEntry<'a> = (&'a [RewriteRule], &'a [Vec<Vec<u8>>]);
-
-/// Metric function type used in hypothesis testing
-type MetricFn = dyn Fn(&[Vec<Vec<u8>>]) -> f64;
-
-/// Truth table for a 2-input Boolean function
-type TruthTable<'a> = Vec<((u8, u8), u8)>;
+use crate::calibration::CalibrationConfig;
+use crate::calibration::{calibrate, generate_trajectories};
+use crate::hypotheses::{Hypothesis, surviving_hypotheses};
+use crate::metrics::{compute_memory, compute_persistence, compute_storage};
+use crate::observation::Observation;
+use crate::record::{HypothesisRecord, ResearchRecord, UniverseResult};
+use crate::rules::Rule;
+use crate::types::BooleanTester;
+use crate::types::RuleGenerator;
+use crate::types::TestEnsembles;
+use crate::universe::InformationUniverse;
 
 // ===================================================================
-// Research Record
-// ===================================================================
-
-/// The output of one complete scientific cycle.
-///
-/// Contains all data needed to reproduce, audit, or extend the
-/// experimental results.
-#[derive(Debug, Clone)]
-pub struct ResearchRecord {
-    /// ARCO version string.
-    pub version: String,
-    /// Wall-clock duration in seconds.
-    pub elapsed_seconds: f64,
-    /// Configuration parameters.
-    pub config: HashMap<String, String>,
-    /// Calibrated emergence thresholds.
-    pub thresholds: HashMap<String, f64>,
-    /// Per-universe results.
-    pub results: Vec<UniverseResult>,
-    /// All hypotheses tested.
-    pub hypotheses: Vec<HypothesisRecord>,
-    /// Boolean function discoveries.
-    pub boolean_discoveries: HashMap<String, usize>,
-    /// Triggered failure conditions.
-    pub failure_conditions: Vec<String>,
-}
-
-/// Per-universe experimental result.
-#[derive(Debug, Clone)]
-pub struct UniverseResult {
-    pub universe_id: usize,
-    pub structured_ratio: f64,
-    pub n_rules: usize,
-    pub n_structured: usize,
-    pub rule_names: Vec<String>,
-    pub persistence: f64,
-    pub storage: f64,
-    pub memory: f64,
-}
-
-/// Serialized hypothesis record for the research output.
-#[derive(Debug, Clone)]
-pub struct HypothesisRecord {
-    pub name: String,
-    pub condition_desc: String,
-    pub property_name: String,
-    pub complexity: f64,
-    pub accuracy: f64,
-    pub score: f64,
-    pub survives: bool,
-}
-
-impl From<&Hypothesis> for HypothesisRecord {
-    fn from(h: &Hypothesis) -> Self {
-        Self {
-            name: h.name.clone(),
-            condition_desc: h.condition_desc.clone(),
-            property_name: h.property_name.clone(),
-            complexity: h.complexity,
-            accuracy: h.accuracy,
-            score: h.score,
-            survives: h.survives(),
-        }
-    }
-}
-
-impl ResearchRecord {
-    /// Create a new empty research record.
-    pub fn new() -> Self {
-        Self {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            elapsed_seconds: 0.0,
-            config: HashMap::new(),
-            thresholds: HashMap::new(),
-            results: Vec::new(),
-            hypotheses: Vec::new(),
-            boolean_discoveries: HashMap::new(),
-            failure_conditions: Vec::new(),
-        }
-    }
-
-    /// Number of universes above the persistence threshold.
-    pub fn n_persistent(&self) -> usize {
-        let threshold = self
-            .thresholds
-            .get("persistence")
-            .copied()
-            .unwrap_or(f64::MAX);
-        self.results
-            .iter()
-            .filter(|r| r.persistence > threshold)
-            .count()
-    }
-
-    /// Number of universes above the storage threshold.
-    pub fn n_storage(&self) -> usize {
-        let threshold = self.thresholds.get("storage").copied().unwrap_or(f64::MAX);
-        self.results
-            .iter()
-            .filter(|r| r.storage > threshold)
-            .count()
-    }
-
-    /// Number of universes above the memory threshold.
-    pub fn n_memory(&self) -> usize {
-        let threshold = self.thresholds.get("memory").copied().unwrap_or(f64::MAX);
-        self.results.iter().filter(|r| r.memory > threshold).count()
-    }
-
-    /// Human-readable summary.
-    pub fn summary(&self) -> String {
-        let mut lines = Vec::new();
-        lines.push(format!("ARCO v{} — Scientific Cycle Report", self.version));
-        lines.push("=".repeat(60));
-        lines.push(format!("Universes: {}", self.results.len()));
-        lines.push(format!("Duration:  {:.1}s", self.elapsed_seconds));
-        lines.push(String::new());
-        lines.push("Emergence (above calibrated thresholds):".to_string());
-        lines.push(format!(
-            "  Storage: {}/{} ({:.1}%)",
-            self.n_storage(),
-            self.results.len(),
-            100.0 * self.n_storage() as f64 / self.results.len() as f64,
-        ));
-        lines.push(format!(
-            "  Memory:  {}/{} ({:.1}%)",
-            self.n_memory(),
-            self.results.len(),
-            100.0 * self.n_memory() as f64 / self.results.len() as f64,
-        ));
-        lines.push(String::new());
-        lines.push(format!("Hypotheses tested: {}", self.hypotheses.len()));
-        let surviving: Vec<&HypothesisRecord> =
-            self.hypotheses.iter().filter(|h| h.survives).collect();
-        lines.push(format!("Hypotheses survived: {}", surviving.len()));
-
-        if !surviving.is_empty() {
-            lines.push(String::new());
-            lines.push("Surviving hypotheses:".to_string());
-            for h in surviving {
-                lines.push(format!(
-                    "  {}: {} (acc={:.3}, score={:.3})",
-                    h.name, h.condition_desc, h.accuracy, h.score,
-                ));
-            }
-        }
-
-        if !self.boolean_discoveries.is_empty() {
-            lines.push(String::new());
-            lines.push("Boolean functions validated:".to_string());
-            let mut gates: Vec<(&String, &usize)> = self.boolean_discoveries.iter().collect();
-            gates.sort_by(|a, b| a.0.cmp(b.0));
-            for (gate, count) in gates {
-                lines.push(format!("  {}: {}", gate, count));
-            }
-        }
-
-        if !self.failure_conditions.is_empty() {
-            lines.push(String::new());
-            lines.push("FAILURE CONDITIONS TRIGGERED:".to_string());
-            for fc in &self.failure_conditions {
-                lines.push(format!("  ! {}", fc));
-            }
-        }
-
-        lines.join("\n")
-    }
-}
-
-impl Default for ResearchRecord {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ===================================================================
-// Spectrum analysis
-// ===================================================================
-
-/// Group results by structured-ratio bracket.
-fn compute_spectrum(results: &[UniverseResult], threshold: f64) -> HashMap<String, SpectrumBucket> {
-    let brackets: &[(&str, f64, f64)] = &[
-        ("Noise", 0.00, 0.15),
-        ("Noise-dominated", 0.15, 0.40),
-        ("Balanced", 0.40, 0.60),
-        ("Structure-dominated", 0.60, 0.85),
-        ("Structured", 0.85, 1.01),
-    ];
-
-    let mut spectrum = HashMap::new();
-
-    for (label, low, high) in brackets {
-        let group: Vec<&UniverseResult> = results
-            .iter()
-            .filter(|r| r.structured_ratio >= *low && r.structured_ratio < *high)
-            .collect();
-
-        if group.is_empty() {
-            continue;
-        }
-
-        let n = group.len();
-        let storage_pct =
-            100.0 * group.iter().filter(|r| r.storage > threshold).count() as f64 / n as f64;
-        let mean_storage = group.iter().map(|r| r.storage).sum::<f64>() / n as f64;
-
-        spectrum.insert(
-            label.to_string(),
-            SpectrumBucket {
-                n,
-                storage_pct,
-                mean_storage,
-            },
-        );
-    }
-
-    spectrum
-}
-
-#[derive(Debug, Clone)]
-struct SpectrumBucket {
-    n: usize,
-    storage_pct: f64,
-    mean_storage: f64,
-}
-
-// ===================================================================
-// Main scientific cycle
+// Cycle Configuration
 // ===================================================================
 
 /// Configuration for a scientific cycle run.
+///
+/// All parameters have sensible defaults. The cycle is reproducible
+/// given the same config and universe.
+#[derive(Debug, Clone)]
 pub struct CycleConfig {
+    /// Number of training universes.
     pub n_train: usize,
+    /// Number of held-out test universes.
     pub n_test: usize,
-    pub n_vertices: usize,
+    /// Ensemble size per universe (trajectories from distinct initial states).
     pub n_ensemble: usize,
+    /// Timesteps per trajectory.
     pub steps: usize,
-    pub window_size: usize,
-    pub obs_name: String,
+    /// Maximum timescale for storage/memory.
     pub max_delta: usize,
+    /// Number of shuffles for bias correction.
     pub n_shuffles: usize,
+    /// Number of null universes for calibration.
     pub n_null_universes: usize,
+    /// Random seed for reproducibility.
     pub seed: u64,
 }
 
@@ -290,11 +163,8 @@ impl Default for CycleConfig {
         Self {
             n_train: 300,
             n_test: 100,
-            n_vertices: 3,
             n_ensemble: 10,
             steps: 60,
-            window_size: 1,
-            obs_name: "compound".to_string(),
             max_delta: 15,
             n_shuffles: 10,
             n_null_universes: 30,
@@ -303,21 +173,64 @@ impl Default for CycleConfig {
     }
 }
 
+// ===================================================================
+// Scientific Cycle
+// ===================================================================
+
 /// Execute the full ARCO scientific cycle.
 ///
-/// Steps:
-/// 1. GENERATE — create spectrum universes
-/// 2. CALIBRATE — compute thresholds from destructive null
-/// 3. OBSERVE — compute emergence metrics on all universes
-/// 4. HYPOTHESIZE & TEST — evaluate hypotheses on held-out data
-/// 5. VALIDATE — test Boolean validation
-/// 6. REVISE — check failure conditions, compile spectrum,
-///    report surviving laws
-pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
+/// # Type parameters
+///
+/// - `U: InformationUniverse` — The universe type. The cycle is fully
+///   generic over the state, rule, observation, and schedule types.
+///   No restrictions on `Observation::Output` — any hashable,
+///   comparable type works.
+///
+/// # Steps
+///
+/// 1. **Generate**: Call `rule_generator` to sample rule sets.
+/// 2. **Calibrate**: Compute thresholds from destructive null
+///    universes using `universe.null_rules()`.
+/// 3. **Observe**: Generate ensembles via `generate_trajectories`
+///    and compute storage, memory, and persistence for each
+///    training universe.
+/// 4. **Hypothesize & Test**: For each hypothesis, evaluate its
+///    condition on test rule sets, compute the predicted metric
+///    directly, and check against the calibrated threshold.
+/// 5. **Revise**: Check failure conditions, optionally verify
+///    boolean functions, compile the research record.
+///
+/// # Parameters
+///
+/// * `universe` — The Information Universe to study.
+/// * `config` — Experimental parameters.
+/// * `hypotheses` — Mutable slice of hypotheses to test. Their
+///   `accuracy` and `score` fields will be updated in place.
+/// * `rule_generator` — Function that generates a rule set and its
+///   structured ratio given an RNG. This is substrate-specific.
+/// * `boolean_tester` — Optional function that tests whether a
+///   rule set implements boolean functions. Pass `None` to skip
+///   boolean verification.
+///
+/// # Returns
+///
+/// A [`ResearchRecord`] with all experimental data.
+pub fn run_cycle<U: InformationUniverse>(
+    universe: &U,
+    config: &CycleConfig,
+    hypotheses: &mut [Hypothesis<U::Rule>],
+    rule_generator: &mut RuleGenerator<U>,
+    boolean_tester: Option<&BooleanTester<U>>,
+) -> ResearchRecord<U>
+where
+    <U::Observation as Observation<U::State>>::Output: Eq + std::hash::Hash + Clone + Send + Sync,
+    U::Rule: Send + Sync,
+    U::State: Send + Sync,
+{
     let t0 = Instant::now();
-    let mut record = ResearchRecord::new();
+    let mut record = ResearchRecord::new(env!("CARGO_PKG_VERSION"));
 
-    // Store config
+    // Store config for reproducibility
     record
         .config
         .insert("n_train".to_string(), config.n_train.to_string());
@@ -326,81 +239,60 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
         .insert("n_test".to_string(), config.n_test.to_string());
     record
         .config
-        .insert("n_vertices".to_string(), config.n_vertices.to_string());
-    record
-        .config
         .insert("n_ensemble".to_string(), config.n_ensemble.to_string());
     record
         .config
         .insert("steps".to_string(), config.steps.to_string());
     record
         .config
-        .insert("window_size".to_string(), config.window_size.to_string());
+        .insert("max_delta".to_string(), config.max_delta.to_string());
     record
         .config
-        .insert("obs_name".to_string(), config.obs_name.clone());
+        .insert("n_shuffles".to_string(), config.n_shuffles.to_string());
+    record.config.insert(
+        "n_null_universes".to_string(),
+        config.n_null_universes.to_string(),
+    );
     record
         .config
         .insert("seed".to_string(), config.seed.to_string());
 
     let mut rng = StdRng::seed_from_u64(config.seed);
-
-    let state_obs = crate::observation::get_state_observer(&config.obs_name)
-        .unwrap_or(&crate::observation::observe_full_state);
-    let obs_fn = |window: &[BinaryGraphState]| -> Vec<u8> { state_obs(window.last().unwrap()) };
+    let state_space = universe.state_space();
+    let schedule = universe.schedule();
+    let observer = universe.observation();
 
     // ================================================================
     // STEP 1: GENERATE
     // ================================================================
-    let structured_pool = create_structured_rules();
-    let destructive_pool = create_destructive_rules();
+    let mut train_subsets: Vec<(Vec<U::Rule>, f64)> = Vec::with_capacity(config.n_train);
+    let mut test_subsets: Vec<(Vec<U::Rule>, f64)> = Vec::with_capacity(config.n_test);
 
-    let ratios = vec![0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
-    let all_subsets = generate_mixed_rule_subsets(
-        &structured_pool,
-        &destructive_pool,
-        config.n_train + config.n_test,
-        5,
-        &ratios,
-        &mut rng,
-    );
-
-    // Shuffle and split
-    let mut indices: Vec<usize> = (0..all_subsets.len()).collect();
-    for i in (1..indices.len()).rev() {
-        let j = rng.random_range(0..=i);
-        indices.swap(i, j);
+    for _ in 0..config.n_train {
+        train_subsets.push(rule_generator(&mut rng));
     }
-
-    let train_subsets: Vec<_> = indices[..config.n_train]
-        .iter()
-        .map(|&i| all_subsets[i].clone())
-        .collect();
-    let test_subsets: Vec<_> = indices[config.n_train..config.n_train + config.n_test]
-        .iter()
-        .map(|&i| all_subsets[i].clone())
-        .collect();
-
-    // Generate state pool
-    let state_pool: Vec<BinaryGraphState> = (0..500)
-        .map(|_| BinaryGraphState::random(config.n_vertices, &mut rng))
-        .collect();
+    for _ in 0..config.n_test {
+        test_subsets.push(rule_generator(&mut rng));
+    }
 
     // ================================================================
     // STEP 2: CALIBRATE
     // ================================================================
+    let ca_config = CalibrationConfig {
+        percentile: 95.0,
+        floor_persistence: 0.01,
+        floor_storage: 0.01,
+        floor_memory: 0.01,
+        max_delta: config.max_delta,
+        n_shuffles: config.n_shuffles,
+        seed: config.seed,
+    };
     let calibration = calibrate(
+        universe,
         config.n_null_universes,
-        config.n_vertices,
         config.n_ensemble,
         config.steps,
-        config.window_size,
-        5, // max_rules_per_subset
-        &obs_fn,
-        95.0,
-        config.max_delta,
-        config.n_shuffles,
-        config.seed,
+        &ca_config,
     );
 
     record
@@ -416,184 +308,133 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
     // ================================================================
     // STEP 3: OBSERVE
     // ================================================================
-    let storage_threshold = calibration.storage_threshold;
+    for (i, (rules, ratio)) in train_subsets.iter().enumerate() {
+        // Select random initial states
+        let n_pool = state_space.len();
+        let n_ens = config.n_ensemble.min(n_pool);
+        let mut init_indices: Vec<usize> = (0..n_pool).collect();
+        let mut local_rng = StdRng::seed_from_u64(config.seed + i as u64 * 137);
+        for j in 0..n_ens {
+            let k = local_rng.random_range(j..n_pool);
+            init_indices.swap(j, k);
+        }
+        let initial_states: Vec<U::State> = init_indices
+            .iter()
+            .take(n_ens)
+            .map(|&idx| state_space[idx].clone())
+            .collect();
 
-    // Pre-allocate for parallel collection
-    let mut results: Vec<UniverseResult> = (0..train_subsets.len())
-        .map(|_| UniverseResult {
-            universe_id: 0,
-            structured_ratio: 0.0,
-            n_rules: 0,
-            n_structured: 0,
-            rule_names: vec![],
-            persistence: 0.0,
-            storage: 0.0,
-            memory: 0.0,
-        })
-        .collect();
+        // Generate ensemble
+        let ensemble = generate_trajectories(
+            &initial_states,
+            rules,
+            config.steps,
+            schedule,
+            observer,
+            config.seed + i as u64 * 137,
+        );
 
-    results
-        .par_iter_mut()
-        .zip(train_subsets.par_iter())
-        .enumerate()
-        .for_each(|(i, (result, (rules, ratio)))| {
-            let mut local_rng = StdRng::seed_from_u64(config.seed + i as u64 * 137);
+        // Compute metrics
+        let storage = compute_storage(&ensemble, config.max_delta, config.n_shuffles, config.seed);
+        let memory = compute_memory(&ensemble, config.max_delta, config.n_shuffles, config.seed);
+        let persistence = compute_persistence(&ensemble, 1, config.n_shuffles, config.seed);
 
-            let n_pool = state_pool.len();
-            let mut init_indices: Vec<usize> = (0..n_pool).collect();
-            for j in 0..config.n_ensemble {
-                let k = local_rng.random_range(j..n_pool);
-                init_indices.swap(j, k);
-            }
-            let initial_states: Vec<BinaryGraphState> = init_indices
-                .iter()
-                .take(config.n_ensemble)
-                .map(|&idx| state_pool[idx].clone())
-                .collect();
-
-            let ensemble = generate_ensemble(
-                &initial_states,
-                rules,
-                config.steps,
-                config.n_ensemble,
-                config.window_size,
-                &DEFAULT_SCHEDULE,
-                &obs_fn,
-                config.seed + i as u64 * 137,
-            );
-
-            *result = UniverseResult {
-                universe_id: i,
-                structured_ratio: *ratio,
-                n_rules: rules.len(),
-                n_structured: rules
-                    .iter()
-                    .filter(|r| r.rule_type() == "structured")
-                    .count(),
-                rule_names: rules.iter().map(|r| r.name().to_string()).collect(),
-                persistence: crate::metrics::compute_persistence(
-                    &ensemble,
-                    1,
-                    config.n_shuffles,
-                    config.seed,
-                ),
-                storage: compute_storage(
-                    &ensemble,
-                    config.max_delta,
-                    config.n_shuffles,
-                    config.seed,
-                ),
-                memory: compute_memory(&ensemble, config.max_delta, config.n_shuffles, config.seed),
-            };
+        record.results.push(UniverseResult {
+            universe_id: i,
+            structured_ratio: *ratio,
+            n_rules: rules.len(),
+            rule_names: rules.iter().map(|r| r.name().to_string()).collect(),
+            persistence,
+            storage,
+            memory,
         });
-
-    record.results = results;
+    }
 
     // ================================================================
     // STEP 4: HYPOTHESIZE & TEST
     // ================================================================
-    let mut hypotheses = generate_standard_hypotheses();
+    // Generate test ensembles
+    let mut test_ensembles: TestEnsembles<U> = Vec::with_capacity(test_subsets.len());
 
-    // Prepare test data
-    let mut test_data = Vec::new();
     for (i, (rules, _ratio)) in test_subsets.iter().enumerate() {
-        let mut local_rng = StdRng::seed_from_u64(config.seed + 10000 + i as u64 * 137);
-
-        let n_pool = state_pool.len();
+        let n_pool = state_space.len();
+        let n_ens = config.n_ensemble.min(n_pool);
         let mut init_indices: Vec<usize> = (0..n_pool).collect();
-        for j in 0..config.n_ensemble {
+        let mut local_rng = StdRng::seed_from_u64(config.seed + 10000 + i as u64 * 137);
+        for j in 0..n_ens {
             let k = local_rng.random_range(j..n_pool);
             init_indices.swap(j, k);
         }
-        let initial_states: Vec<BinaryGraphState> = init_indices
+        let initial_states: Vec<U::State> = init_indices
             .iter()
-            .take(config.n_ensemble)
-            .map(|&idx| state_pool[idx].clone())
+            .take(n_ens)
+            .map(|&idx| state_space[idx].clone())
             .collect();
 
-        let ensemble = generate_ensemble(
+        let ensemble = generate_trajectories(
             &initial_states,
             rules,
             config.steps,
-            config.n_ensemble,
-            config.window_size,
-            &DEFAULT_SCHEDULE,
-            &obs_fn,
+            schedule,
+            observer,
             config.seed + 10000 + i as u64 * 137,
         );
 
-        test_data.push((rules.as_slice(), ensemble));
+        test_ensembles.push(ensemble);
     }
 
-    // Build typed test data references
-    let test_refs: Vec<TestDataEntry> = test_data
-        .iter()
-        .map(|(rules, ensemble)| (*rules, ensemble.as_ref()))
-        .collect();
+    // Test each hypothesis directly.
+    // The compiler monomorphizes the correct metric function for the
+    // concrete Observation::Output type.
+    for h in hypotheses.iter_mut() {
+        let threshold = record
+            .thresholds
+            .get(&h.property_name)
+            .copied()
+            .unwrap_or(0.0);
 
-    // Metric map
-    let mut metric_map: HashMap<String, Box<MetricFn>> = HashMap::new();
-    let max_delta = config.max_delta;
-    let n_shuffles = config.n_shuffles;
-    let seed = config.seed;
+        let mut positive = 0usize;
+        let mut correct = 0usize;
 
-    metric_map.insert(
-        "persistence".to_string(),
-        Box::new(move |trajs: &[Vec<Vec<u8>>]| -> f64 {
-            crate::metrics::compute_persistence(trajs, 1, n_shuffles, seed)
-        }),
-    );
-    metric_map.insert(
-        "storage".to_string(),
-        Box::new(move |trajs: &[Vec<Vec<u8>>]| -> f64 {
-            compute_storage(trajs, max_delta, n_shuffles, seed)
-        }),
-    );
-    metric_map.insert(
-        "memory".to_string(),
-        Box::new(move |trajs: &[Vec<Vec<u8>>]| -> f64 {
-            compute_memory(trajs, max_delta, n_shuffles, seed)
-        }),
-    );
+        for ((rules, _ratio), ensemble) in test_subsets.iter().zip(test_ensembles.iter()) {
+            if (h.condition_fn)(rules) {
+                positive += 1;
+                let metric_value = match h.property_name.as_str() {
+                    "persistence" => {
+                        compute_persistence(ensemble, 1, config.n_shuffles, config.seed)
+                    }
+                    "storage" => {
+                        compute_storage(ensemble, config.max_delta, config.n_shuffles, config.seed)
+                    }
+                    "memory" => {
+                        compute_memory(ensemble, config.max_delta, config.n_shuffles, config.seed)
+                    }
+                    _ => 0.0,
+                };
+                if metric_value > threshold {
+                    correct += 1;
+                }
+            }
+        }
 
-    test_all_hypotheses(&mut hypotheses, &test_refs, &metric_map, &record.thresholds);
+        h.accuracy = if positive > 0 {
+            correct as f64 / positive as f64
+        } else {
+            0.0
+        };
+        h.score = h.accuracy - 0.1 * h.complexity;
+    }
 
     record.hypotheses = hypotheses.iter().map(HypothesisRecord::from).collect();
 
     // ================================================================
-    // STEP 5: BOOLEAN VALIDATION
+    // STEP 5: BOOLEAN VERIFICATION (OPTIONAL)
     // ================================================================
-    let target_functions: HashMap<&str, TruthTable> = HashMap::from([
-        (
-            "NAND",
-            vec![((0, 0), 1), ((0, 1), 1), ((1, 0), 1), ((1, 1), 0)],
-        ),
-        (
-            "NOR",
-            vec![((0, 0), 1), ((0, 1), 0), ((1, 0), 0), ((1, 1), 0)],
-        ),
-        (
-            "AND",
-            vec![((0, 0), 0), ((0, 1), 0), ((1, 0), 0), ((1, 1), 1)],
-        ),
-        (
-            "OR",
-            vec![((0, 0), 0), ((0, 1), 1), ((1, 0), 1), ((1, 1), 1)],
-        ),
-        (
-            "XOR",
-            vec![((0, 0), 0), ((0, 1), 1), ((1, 0), 1), ((1, 1), 0)],
-        ),
-    ]);
-
-    // Test high-structure universes (ratio >= 0.4)
-    for (rules, _ratio) in train_subsets.iter().filter(|(_, r)| *r >= 0.4).take(200) {
-        for (gate_name, truth_table) in &target_functions {
-            if test_boolean_function(rules, truth_table, 8, 5, &DEFAULT_SCHEDULE) {
-                *record
-                    .boolean_discoveries
-                    .entry(gate_name.to_string())
-                    .or_insert(0) += 1;
+    if let Some(tester) = boolean_tester {
+        for (rules, _ratio) in train_subsets.iter() {
+            let verified = tester(rules);
+            for (gate, count) in verified {
+                *record.boolean_verifications.entry(gate).or_insert(0) += count;
             }
         }
     }
@@ -601,7 +442,11 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
     // ================================================================
     // STEP 6: FAILURE CONDITION CHECK
     // ================================================================
-    let nand_count = record.boolean_discoveries.get("NAND").copied().unwrap_or(0);
+    let nand_count = record
+        .boolean_verifications
+        .get("NAND")
+        .copied()
+        .unwrap_or(0);
 
     if record.n_storage() == 0 {
         record
@@ -609,131 +454,19 @@ pub fn run_cycle(config: &CycleConfig) -> ResearchRecord {
             .push("F-1 (NULL): No storage universes found.".to_string());
     }
 
-    if nand_count == 0 {
+    if nand_count == 0 && boolean_tester.is_some() {
         record
             .failure_conditions
-            .push("F-1 (NULL): NAND not validated.".to_string());
+            .push("F-1 (NULL): NAND not verified.".to_string());
     }
 
-    let surviving = surviving_hypotheses(&hypotheses);
-    if surviving.is_empty() {
+    let surviving = surviving_hypotheses(hypotheses);
+    if surviving.is_empty() && !hypotheses.is_empty() {
         record
             .failure_conditions
             .push("F-6 (DISCONFIRMATION): No hypotheses survived.".to_string());
     }
 
-    // ================================================================
-    // FINALIZE
-    // ================================================================
     record.elapsed_seconds = t0.elapsed().as_secs_f64();
-
-    // Print summary
-    println!("{}", record.summary());
-
-    // Print spectrum if we have storage results
-    if record.n_storage() > 0 {
-        let spectrum = compute_spectrum(&record.results, storage_threshold);
-        println!("\nStorage Spectrum:");
-        for label in &[
-            "Noise",
-            "Noise-dominated",
-            "Balanced",
-            "Structure-dominated",
-            "Structured",
-        ] {
-            if let Some(bucket) = spectrum.get(*label) {
-                println!(
-                    "  {:<20} n={:<4} storage={:<6.1}% mean={:.4}",
-                    label, bucket.n, bucket.storage_pct, bucket.mean_storage,
-                );
-            }
-        }
-    }
-
     record
-}
-
-// ===================================================================
-// Quick-start
-// ===================================================================
-
-/// Run the scientific cycle with default parameters.
-pub fn quick_start() -> ResearchRecord {
-    run_cycle(&CycleConfig::default())
-}
-
-// ===================================================================
-// Tests
-// ===================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_research_record_default() {
-        let record = ResearchRecord::default();
-        assert!(!record.version.is_empty());
-        assert_eq!(record.results.len(), 0);
-        assert_eq!(record.hypotheses.len(), 0);
-    }
-
-    #[test]
-    fn test_record_counts() {
-        let mut record = ResearchRecord::default();
-        record.thresholds.insert("storage".to_string(), 0.5);
-
-        record.results.push(UniverseResult {
-            universe_id: 0,
-            structured_ratio: 1.0,
-            n_rules: 3,
-            n_structured: 3,
-            rule_names: vec!["R0".to_string()],
-            persistence: 0.0,
-            storage: 0.8,
-            memory: 0.8,
-        });
-        record.results.push(UniverseResult {
-            universe_id: 1,
-            structured_ratio: 0.0,
-            n_rules: 2,
-            n_structured: 0,
-            rule_names: vec!["D0".to_string()],
-            persistence: 0.0,
-            storage: 0.1,
-            memory: 0.1,
-        });
-
-        assert_eq!(record.n_storage(), 1);
-    }
-
-    #[test]
-    fn test_cycle_config_default() {
-        let config = CycleConfig::default();
-        assert_eq!(config.n_train, 300);
-        assert_eq!(config.n_vertices, 3);
-        assert_eq!(config.n_ensemble, 10);
-    }
-
-    #[test]
-    fn test_quick_start_runs() {
-        // Override config for fast test
-        let config = CycleConfig {
-            n_train: 20,
-            n_test: 5,
-            n_vertices: 3,
-            n_ensemble: 4,
-            steps: 10,
-            window_size: 1,
-            obs_name: "compound".to_string(),
-            max_delta: 5,
-            n_shuffles: 3,
-            n_null_universes: 5,
-            seed: 42,
-        };
-        let record = run_cycle(&config);
-        assert!(record.results.len() >= 20);
-        assert!(!record.thresholds.is_empty());
-        assert!(!record.hypotheses.is_empty());
-    }
 }

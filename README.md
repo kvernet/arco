@@ -23,7 +23,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-arco = "0.2"
+arco = "0.3"
 ```
 
 ### From source
@@ -36,41 +36,7 @@ cargo build --release
 
 Requires Rust 1.85+.
 
-## Quick Start
-
-```rust
-use arco::cycle::{CycleConfig, run_cycle};
-
-fn main() {
-    let config = CycleConfig::default();
-    let record = run_cycle(&config);
-    println!("{}", record.summary());
-}
-```
-
-Or via the CLI:
-
-```bash
-cargo run --release
-cargo run --release -- --train 1000 --test 300 --seed 42
-cargo run --release -- --quick
-```
-
 See [`examples/`](https://github.com/kvernet/arco/tree/main/examples) for more usage patterns.
-
-## Package Structure
-
-| Module | Purpose |
-|--------|---------|
-| `state` | State trait and BinaryGraphState |
-| `rules` | RewriteRule, MatchInfo, compose, generators |
-| `dynamics` | Schedule, trajectory and ensemble generation |
-| `observation` | Single-state and windowed observers |
-| `metrics` | Shuffle-corrected NMI, storage, memory |
-| `calibration` | Null distribution threshold calibration |
-| `hypotheses` | Hypothesis generation, testing, MDL scoring |
-| `universe` | InformationUniverse container and factories |
-| `cycle` | Scientific cycle orchestrator |
 
 ## Documentation
 

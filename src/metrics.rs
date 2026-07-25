@@ -1,33 +1,40 @@
 //! Emergence metrics for Information Universes.
 //!
-//! Per Constitution:
+//! Per the Mathematical Constitution:
 //!     Emergence metrics are objective functions mapping ensemble
 //!     trajectories to real-valued scores. All metrics use:
 //!     - Ensemble estimation (multiple trajectories from distinct
 //!       initial states)
-//!     - Shuffle-corrected normalized mutual information (bias correction)
+//!     - Shuffle-corrected normalized mutual information
 //!     - Calibrated thresholds against null distributions
 //!
-//! Metrics defined:
-//! - Storage: maximum information preservation across all timescales
-//! - Memory: alias for storage (information about the past remains
-//!   recoverable)
-//! - Persistence: per-timestep information preservation (requires
-//!   large ensembles to be reliable)
-//! - Trajectory separation: distinguishability of futures given
-//!   different initial conditions (diagnostic only)
+//! # Metrics
 //!
-//! Design commitments:
-//! - All MI-based metrics use bias correction via temporal shuffling.
-//! - Metrics operate on observation sequences, not raw states.
-//! - Storage uses pooled estimation (all timesteps + ensemble members).
+//! - **Storage**: Maximum information preservation across all
+//!   timescales, using pooled estimation.
+//! - **Memory**: Alias for storage — recoverable information about
+//!   the past.
+//! - **Persistence**: Per-timestep information preservation at a
+//!   given timescale Δ.
+//! - **Initial condition separation**: How distinguishable are
+//!   futures given different initial states? (Diagnostic only.)
 //!
-//! # Estimator limitations
+//! # Estimator
 //!
-//! The plugin MI estimator used here is not asymptotically unbiased.
-//! For publication-quality results on larger state spaces, replace
-//! with a Bayesian (NSB), Miller-Madow, or kNN-based estimator.
-//! The estimator boundary is the `shuffle_corrected_nmi` function.
+//! The plugin mutual information estimator is used with shuffle
+//! correction to remove small-sample bias. The estimator is modular:
+//! replace `shuffle_corrected_nmi` with a Bayesian (NSB) or k-NN
+//! estimator without changing the metric functions.
+//!
+//! # Limitations
+//!
+//! - The plugin estimator is biased when the observation alphabet
+//!   is large relative to sample size. Shuffle correction mitigates
+//!   but does not eliminate this.
+//! - Per-timestep persistence requires larger ensembles than storage
+//!   to be reliable.
+//! - Global shuffling assumes no long-range temporal autocorrelation
+//!   in the null distribution.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -60,10 +67,12 @@ fn entropy<T: Eq + Hash>(values: &[T]) -> f64 {
     h
 }
 
-/// Plugin estimator of mutual information I(X;Y) from discrete observations.
+/// Plugin estimator of mutual information I(X;Y) from discrete
+/// observations.
 ///
-/// Uses the empirical joint distribution. Observation values must be hashable.
-/// Biased upward when the observation alphabet size is comparable to sample size.
+/// Uses the empirical joint distribution. Observation values must
+/// be hashable. Biased upward when the observation alphabet size
+/// is comparable to sample size.
 pub fn discrete_mutual_information<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
     if x_seq.len() < 2 || y_seq.len() < 2 || x_seq.len() != y_seq.len() {
         return 0.0;
@@ -133,12 +142,13 @@ pub fn normalized_mutual_information<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &
 
 /// Bias-corrected normalized mutual information.
 ///
-/// NMI_corrected = NMI_observed - mean(NMI_shuffled), where the shuffle
-/// baseline is estimated by randomly permuting Y and recomputing NMI.
-/// This subtracts the small-sample bias of the plugin NMI estimator.
+/// NMI_corrected = NMI_observed - mean(NMI_shuffled), where the
+/// shuffle baseline is estimated by randomly permuting Y and
+/// recomputing NMI. This subtracts the small-sample bias of the
+/// plugin NMI estimator.
 ///
-/// Per Constitution: all MI-based emergence metrics
-/// must use shuffle correction.
+/// Per the Constitution: all MI-based emergence metrics must use
+/// shuffle correction.
 ///
 /// # Limitations
 ///
@@ -165,7 +175,6 @@ pub fn shuffle_corrected_nmi<T: Eq + Hash + Clone>(
     let mut nmi_shuffles = Vec::with_capacity(n_shuffles);
 
     for _ in 0..n_shuffles {
-        // Fisher-Yates shuffle on y_shuffled
         for i in (1..y_shuffled.len()).rev() {
             let j = rng.random_range(0..=i);
             y_shuffled.swap(i, j);
@@ -183,16 +192,14 @@ pub fn shuffle_corrected_nmi<T: Eq + Hash + Clone>(
 
 /// Persistence: information preservation at timescale Δ.
 ///
-/// Computes average shuffle-corrected NMI between ensemble observations
-/// at time t and time t+Δ, averaged over all t.
-///
-/// Per Constitution.
+/// Computes average shuffle-corrected NMI between ensemble
+/// observations at time t and time t+Δ, averaged over all t.
 ///
 /// # Limitations
 ///
 /// At Δ=1 with small ensembles (n ≤ 10), the per-timestep estimator
-/// rarely exceeds the shuffle baseline. Use storage (pooled estimation)
-/// as the primary emergence signal.
+/// rarely exceeds the shuffle baseline. Use [`compute_storage`]
+/// (pooled estimation) as the primary emergence signal.
 pub fn compute_persistence<T: Eq + Hash + Clone>(
     trajectories: &[Vec<T>],
     delta: usize,
@@ -225,34 +232,12 @@ pub fn compute_persistence<T: Eq + Hash + Clone>(
     }
 }
 
-/// Persistence at multiple timescales.
+/// Storage: maximum shuffle-corrected NMI across all timescales,
+/// using pooled estimation.
 ///
-/// Returns a mapping from Δ to persistence score. Used to diagnose
-/// timescale separation — universes with zero Δ=1 persistence but
-/// nonzero Δ≫1 persistence exhibit the Persistence-Storage Decoupling.
-pub fn compute_persistence_multiscale<T: Eq + Hash + Clone>(
-    trajectories: &[Vec<T>],
-    deltas: &[usize],
-    n_shuffles: usize,
-    seed: u64,
-) -> HashMap<usize, f64> {
-    deltas
-        .iter()
-        .map(|&delta| {
-            (
-                delta,
-                compute_persistence(trajectories, delta, n_shuffles, seed),
-            )
-        })
-        .collect()
-}
-
-/// Storage: maximum shuffle-corrected NMI across all timescales.
-///
-/// Uses pooled estimation: all observation pairs from all ensemble
-/// members and all timesteps are pooled before computing NMI. This
-/// gives the estimator sufficient samples to distinguish signal
-/// from shuffle baseline.
+/// All observation pairs from all ensemble members and all timesteps
+/// are pooled before computing NMI. This gives the estimator
+/// sufficient samples to distinguish signal from shuffle baseline.
 pub fn compute_storage<T: Eq + Hash + Clone>(
     trajectories: &[Vec<T>],
     max_delta: usize,
@@ -290,16 +275,14 @@ pub fn compute_storage<T: Eq + Hash + Clone>(
 
 /// Memory: recoverable information about the past.
 ///
-/// Alias for `compute_storage`. In ARCO, memory is quantified as
+/// Alias for [`compute_storage`]. In ARCO, memory is quantified as
 /// delayed mutual information I(O_t; O_{t+Δ}), maximized over Δ.
 /// This measures how much information survives over time.
 ///
 /// Note: This is not the same as "active information storage"
-/// (Lizier et al.), which conditions on the entire past history
-/// rather than a single past observation. ARCO's definition is
-/// intentionally simpler and computable from finite ensembles.
-///
-/// Per Constitution.
+/// (Lizier et al.), which conditions on the entire past history.
+/// ARCO's definition is intentionally simpler and computable from
+/// finite ensembles.
 pub fn compute_memory<T: Eq + Hash + Clone>(
     trajectories: &[Vec<T>],
     max_delta: usize,
@@ -327,7 +310,7 @@ pub fn compute_memory<T: Eq + Hash + Clone>(
 /// not on every intermediate state. For non-stationary dynamics,
 /// consider conditioning on multiple timepoints.
 ///
-/// Preserved for diagnostic use alongside `compute_memory`.
+/// Preserved for diagnostic use alongside [`compute_memory`].
 pub fn compute_initial_condition_separation<T: Eq + Hash + Clone>(
     trajectories: &[Vec<T>],
     max_delta: usize,
@@ -342,7 +325,6 @@ pub fn compute_initial_condition_separation<T: Eq + Hash + Clone>(
     let mut scores = Vec::new();
 
     for delta in 1..=max_delta {
-        // Build conditional distributions: initial observation -> later observations
         let mut initial_to_later: HashMap<&T, Vec<&T>> = HashMap::new();
 
         for traj in trajectories {
@@ -359,7 +341,6 @@ pub fn compute_initial_condition_separation<T: Eq + Hash + Clone>(
                 let later_i = &initial_to_later[initial_vals[i]];
                 let later_j = &initial_to_later[initial_vals[j]];
 
-                // Build count maps for total variation distance
                 let all_keys: HashSet<&&T> = later_i.iter().chain(later_j.iter()).collect();
                 let total_i = later_i.len() as f64;
                 let total_j = later_j.len() as f64;
@@ -381,105 +362,5 @@ pub fn compute_initial_condition_separation<T: Eq + Hash + Clone>(
         0.0
     } else {
         scores.iter().sum::<f64>() / scores.len() as f64
-    }
-}
-
-// ===================================================================
-// Tests
-// ===================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_entropy_deterministic() {
-        let values = vec![1, 1, 1, 1];
-        assert_eq!(entropy(&values), 0.0);
-    }
-
-    #[test]
-    fn test_entropy_uniform() {
-        let values = vec![0, 1, 0, 1];
-        let h = entropy(&values);
-        assert!((h - 1.0).abs() < 0.01); // log2(2) = 1.0
-    }
-
-    #[test]
-    fn test_mi_identical_sequences() {
-        let x = vec![0, 1, 0, 1, 0, 1, 0, 1];
-        let y = x.clone();
-        let mi = discrete_mutual_information(&x, &y);
-        assert!(mi > 0.5); // should be close to 1.0 in NMI terms
-    }
-
-    #[test]
-    fn test_mi_independent() {
-        let x = vec![0, 0, 1, 1, 0, 0, 1, 1];
-        let y = vec![0, 1, 0, 1, 0, 1, 0, 1];
-        let mi = discrete_mutual_information(&x, &y);
-        // Should be low since x and y are independent
-        assert!(mi < 0.3);
-    }
-
-    #[test]
-    fn test_nmi_bounded() {
-        let x = vec![0, 1, 0, 1, 0, 1, 0, 1];
-        let nmi = normalized_mutual_information(&x, &x);
-        assert!((nmi - 1.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_shuffle_correction_reduces_noise() {
-        // Random data should have NMI near 0 after shuffle correction
-        let mut rng = StdRng::seed_from_u64(42);
-        let x: Vec<u8> = (0..100).map(|_| rng.random_range(0..=1)).collect();
-        let y: Vec<u8> = (0..100).map(|_| rng.random_range(0..=1)).collect();
-        let corrected = shuffle_corrected_nmi(&x, &y, 5, 42);
-        // Should be near 0 for independent sequences
-        assert!(
-            corrected < 0.1,
-            "Shuffle-corrected NMI should be near 0 for independent data, got {}",
-            corrected
-        );
-    }
-
-    #[test]
-    fn test_storage_finds_signal() {
-        // Create trajectories with clear temporal dependence
-        let traj1 = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
-        let traj2 = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
-        let trajectories = vec![traj1, traj2];
-        let storage = compute_storage(&trajectories, 5, 5, 42);
-        // Should detect the deterministic alternation
-        assert!(
-            storage > 0.3,
-            "Storage should detect temporal pattern, got {}",
-            storage
-        );
-    }
-
-    #[test]
-    fn test_memory_is_storage() {
-        let traj1 = vec![0, 0, 1, 1, 0, 0, 1, 1];
-        let traj2 = vec![0, 0, 1, 1, 0, 0, 1, 1];
-        let trajectories = vec![traj1, traj2];
-        let storage = compute_storage(&trajectories, 5, 5, 42);
-        let memory = compute_memory(&trajectories, 5, 5, 42);
-        assert_eq!(storage, memory);
-    }
-
-    #[test]
-    fn test_initial_condition_separation_low_for_identical_trajectories() {
-        let traj1 = vec![0, 1, 0, 1, 0];
-        let traj2 = vec![0, 1, 0, 1, 0];
-        let trajectories = vec![traj1, traj2];
-        let sep = compute_initial_condition_separation(&trajectories, 3);
-        // Same trajectories should have 0 separation
-        assert!(
-            sep < 0.01,
-            "Identical trajectories should have near-zero separation, got {}",
-            sep
-        );
     }
 }

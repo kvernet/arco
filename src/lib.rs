@@ -6,10 +6,13 @@
 
 pub mod calibration;
 pub mod cycle;
-pub mod dynamics;
 pub mod hypotheses;
 pub mod metrics;
 pub mod observation;
+pub mod record;
 pub mod rules;
+pub mod schedule;
 pub mod state;
+pub mod substrates;
+pub mod types;
 pub mod universe;

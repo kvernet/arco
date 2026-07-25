@@ -1,7 +1,6 @@
 [package]
 name = "arco"
-version = "0.2.1"
-rust-version = "1.85"
+version = "0.3.0"
 edition = "2024"
 description = "Automated Research into Computational Ontologies — a platform for discovering the conditions under which computation emerges"
 repository = "https://github.com/kvernet/arco"
@@ -10,16 +9,12 @@ readme = "README.md"
 license = "MIT"
 keywords = ["computation", "emergence", "complex-systems", "information-theory", "scientific-computing"]
 categories = ["science", "simulation"]
+rust-version = "1.85"
 
 [dependencies]
 ndarray = "0.17"
 rand = "0.10"
-serde = { version = "1", features = ["derive"] }
-bincode = { version = "2", features = ["derive"] }
-sha2 = "0.11"
 thiserror = "2"
-clap = { version = "4", features = ["derive"] }
-rayon = "1"
 
 [profile.release]
 opt-level = 3
