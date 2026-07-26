@@ -205,7 +205,7 @@ pub trait InformationUniverse {
     type Rule: Rule<Self::State>;
 
     /// The observation operator type for this universe.
-    type Observation: Observation<Self::State>;
+    type Observation: Observation<Self::State> + Sync;
 
     /// The schedule type for this universe.
     type Schedule: Schedule<Self::State, Self::Rule>;

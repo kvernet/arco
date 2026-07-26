@@ -117,6 +117,10 @@ use std::time::Instant;
 use rand::RngExt;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rayon::iter::IndexedParallelIterator;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::IntoParallelRefMutIterator;
+use rayon::iter::ParallelIterator;
 
 use crate::calibration::CalibrationConfig;
 use crate::calibration::{calibrate, generate_trajectories};
@@ -308,80 +312,106 @@ where
     // ================================================================
     // STEP 3: OBSERVE
     // ================================================================
-    for (i, (rules, ratio)) in train_subsets.iter().enumerate() {
-        // Select random initial states
-        let n_pool = state_space.len();
-        let n_ens = config.n_ensemble.min(n_pool);
-        let mut init_indices: Vec<usize> = (0..n_pool).collect();
-        let mut local_rng = StdRng::seed_from_u64(config.seed + i as u64 * 137);
-        for j in 0..n_ens {
-            let k = local_rng.random_range(j..n_pool);
-            init_indices.swap(j, k);
-        }
-        let initial_states: Vec<U::State> = init_indices
-            .iter()
-            .take(n_ens)
-            .map(|&idx| state_space[idx].clone())
-            .collect();
-
-        // Generate ensemble
-        let ensemble = generate_trajectories(
-            &initial_states,
-            rules,
-            config.steps,
-            schedule,
-            observer,
-            config.seed + i as u64 * 137,
-        );
-
-        // Compute metrics
-        let storage = compute_storage(&ensemble, config.max_delta, config.n_shuffles, config.seed);
-        let memory = compute_memory(&ensemble, config.max_delta, config.n_shuffles, config.seed);
-        let persistence = compute_persistence(&ensemble, 1, config.n_shuffles, config.seed);
-
-        record.results.push(UniverseResult {
+    // Pre-allocate results vector for parallelization
+    let mut results: Vec<UniverseResult> = (0..train_subsets.len())
+        .map(|i| UniverseResult {
             universe_id: i,
-            structured_ratio: *ratio,
-            n_rules: rules.len(),
-            rule_names: rules.iter().map(|r| r.name().to_string()).collect(),
-            persistence,
-            storage,
-            memory,
+            structured_ratio: 0.0,
+            n_rules: 0,
+            rule_names: vec![],
+            persistence: 0.0,
+            storage: 0.0,
+            memory: 0.0,
+        })
+        .collect();
+
+    // Parallel observation
+    results
+        .par_iter_mut()
+        .zip(train_subsets.par_iter())
+        .enumerate()
+        .for_each(|(i, (result, (rules, ratio)))| {
+            let mut local_rng = StdRng::seed_from_u64(config.seed + i as u64 * 137);
+
+            let n_pool = state_space.len();
+            let n_ens = config.n_ensemble.min(n_pool);
+            let mut init_indices: Vec<usize> = (0..n_pool).collect();
+            for j in 0..n_ens {
+                let k = local_rng.random_range(j..n_pool);
+                init_indices.swap(j, k);
+            }
+            let initial_states: Vec<U::State> = init_indices
+                .iter()
+                .take(n_ens)
+                .map(|&idx| state_space[idx].clone())
+                .collect();
+
+            let ensemble = generate_trajectories(
+                &initial_states,
+                rules,
+                config.steps,
+                schedule,
+                observer,
+                config.seed + i as u64 * 137,
+            );
+
+            *result = UniverseResult {
+                universe_id: i,
+                structured_ratio: *ratio,
+                n_rules: rules.len(),
+                rule_names: rules.iter().map(|r| r.name().to_string()).collect(),
+                persistence: compute_persistence(&ensemble, 1, config.n_shuffles, config.seed),
+                storage: compute_storage(
+                    &ensemble,
+                    config.max_delta,
+                    config.n_shuffles,
+                    config.seed,
+                ),
+                memory: compute_memory(&ensemble, config.max_delta, config.n_shuffles, config.seed),
+            };
         });
-    }
+
+    record.results = results;
 
     // ================================================================
     // STEP 4: HYPOTHESIZE & TEST
     // ================================================================
     // Generate test ensembles
-    let mut test_ensembles: TestEnsembles<U> = Vec::with_capacity(test_subsets.len());
 
-    for (i, (rules, _ratio)) in test_subsets.iter().enumerate() {
-        let n_pool = state_space.len();
-        let n_ens = config.n_ensemble.min(n_pool);
-        let mut init_indices: Vec<usize> = (0..n_pool).collect();
-        let mut local_rng = StdRng::seed_from_u64(config.seed + 10000 + i as u64 * 137);
-        for j in 0..n_ens {
-            let k = local_rng.random_range(j..n_pool);
-            init_indices.swap(j, k);
-        }
-        let initial_states: Vec<U::State> = init_indices
-            .iter()
-            .take(n_ens)
-            .map(|&idx| state_space[idx].clone())
-            .collect();
+    // Pre-allocate test ensembles
+    let mut test_ensembles: TestEnsembles<U> =
+        (0..test_subsets.len()).map(|_| Vec::new()).collect();
 
-        let ensemble = generate_trajectories(
-            &initial_states,
-            rules,
-            config.steps,
-            schedule,
-            observer,
-            config.seed + 10000 + i as u64 * 137,
-        );
+    // Generate test ensembles in parallel
+    test_ensembles
+        .par_iter_mut()
+        .zip(test_subsets.par_iter())
+        .enumerate()
+        .for_each(|(i, (ensemble_out, (rules, _ratio)))| {
+            let mut local_rng = StdRng::seed_from_u64(config.seed + 10000 + i as u64 * 137);
 
-        test_ensembles.push(ensemble);
-    }
+            let n_pool = state_space.len();
+            let n_ens = config.n_ensemble.min(n_pool);
+            let mut init_indices: Vec<usize> = (0..n_pool).collect();
+            for j in 0..n_ens {
+                let k = local_rng.random_range(j..n_pool);
+                init_indices.swap(j, k);
+            }
+            let initial_states: Vec<U::State> = init_indices
+                .iter()
+                .take(n_ens)
+                .map(|&idx| state_space[idx].clone())
+                .collect();
+
+            *ensemble_out = generate_trajectories(
+                &initial_states,
+                rules,
+                config.steps,
+                schedule,
+                observer,
+                config.seed + 10000 + i as u64 * 137,
+            );
+        });
 
     // Test each hypothesis directly.
     // The compiler monomorphizes the correct metric function for the
