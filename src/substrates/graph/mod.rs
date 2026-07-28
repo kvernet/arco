@@ -28,19 +28,22 @@
 //!
 //! # Usage
 //!
-//! ```rust
-//! // use arco::substrates::graph::{
-//! //     BinaryGraphUniverse, AllVerticesSchedule,
-//! //     create_structured_rules, create_destructive_rules,
-//! //     generate_standard_hypotheses,
-//! // };
-//! // use arco::cycle::{CycleConfig, run_cycle};
-//! //
-//! // let universe = BinaryGraphUniverse::new(3, "compound", 42);
-//! // let config = CycleConfig::default();
-//! // let mut hypotheses = generate_standard_hypotheses();
-//! // let record = run_cycle(&universe, &config, &mut hypotheses, &my_generator, None);
-//! // ```
+//! ```rust,no_run
+//! use arco::cycle::{CycleConfig, run_cycle};
+//! use arco::substrates::graph::{BinaryGraphUniverse, generate_standard_hypotheses};
+//! use rand::SeedableRng;
+//! use rand::rngs::StdRng;
+//!
+//!
+//! let mut rng = StdRng::seed_from_u64(42);
+//! let config = CycleConfig::default();
+//! let universe = BinaryGraphUniverse::new(3, "compound", &mut rng, config.n_train + config.n_test);
+//!
+//! let mut hypotheses = generate_standard_hypotheses();
+//! let record = run_cycle(&universe, &config, &mut hypotheses, None);
+//!
+//! println!("{}", record.summary());
+//! ```
 
 pub mod hypotheses;
 pub mod observation;
@@ -56,5 +59,5 @@ pub use observation::observe_compound;
 pub use rules::{MatchInfo, RewriteRule, create_destructive_rules, create_structured_rules};
 pub use schedule::AllVerticesSchedule;
 pub use state::BinaryGraphState;
-pub use universe::{BinaryGraphUniverse, spectrum_rule_generator};
+pub use universe::BinaryGraphUniverse;
 pub use validation::{test_boolean_function, verify_boolean_functions};

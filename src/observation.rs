@@ -30,33 +30,46 @@
 //! nonzero storage, the coarser observation is insufficient — it
 //! misses the information being preserved.
 //!
-//! # Implementing Observation
+//! # Quick start
+//!
+//! Implement `Observation` for your observer type. The `Output` type
+//! must be hashable and comparable — this is required for mutual
+//! information estimation:
 //!
 //! ```rust
 //! use arco::state::State;
-//! use arco::observation::Observation;
+//! use arco::observation::{Observation, IdentityObserver};
 //!
-//! #[derive(Clone, PartialEq, Eq, Debug, Hash)]
+//! #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 //! struct MyState { data: Vec<u8> }
+//!
 //! impl State for MyState {
 //!     type Encoding = Vec<u8>;
 //!     fn canonical_encoding(&self) -> Self::Encoding { self.data.clone() }
 //!     fn distance(&self, other: &Self) -> u32 {
 //!         self.data.iter().zip(other.data.iter())
-//!             .map(|(a, b)| if a != b { 1 } else { 0 }).sum()
+//!             .map(|(a,b)| if a != b { 1 } else { 0 }).sum()
 //!     }
 //! }
 //!
-//! /// Observe only the sum of all elements.
-//! struct SumObserver;
+//! // A coarse observer: only the first byte.
+//! #[derive(Debug, Clone)]
+//! struct FirstByteObserver;
 //!
-//! impl Observation<MyState> for SumObserver {
+//! impl Observation<MyState> for FirstByteObserver {
 //!     type Output = u8;
-//!
 //!     fn observe(&self, state: &MyState) -> Self::Output {
-//!         state.data.iter().sum()
+//!         state.data.first().copied().unwrap_or(0)
 //!     }
 //! }
+//!
+//! // Or use the built-in identity observer for maximum detail.
+//! let state = MyState { data: vec![1, 2, 3] };
+//! let coarse = FirstByteObserver;
+//! let identity = IdentityObserver;
+//!
+//! assert_eq!(coarse.observe(&state), 1);
+//! assert_eq!(identity.observe(&state), vec![1, 2, 3]);
 //! ```
 //!
 //! # Built-in observers
@@ -93,6 +106,40 @@ use std::hash::Hash;
 /// Observation operators should be stateless. If stateful observation
 /// is needed (e.g., windowed observation over multiple timesteps),
 /// the state should be managed externally and passed as context.
+///
+/// # Example
+///
+/// ```rust
+/// use arco::state::State;
+/// use arco::observation::Observation;
+///
+/// #[derive(Clone, PartialEq, Eq, Hash, Debug)]
+/// struct BitState { value: u8 }
+///
+/// impl State for BitState {
+///     type Encoding = Vec<u8>;
+///     fn canonical_encoding(&self) -> Self::Encoding { vec![self.value] }
+///     fn distance(&self, other: &Self) -> u32 {
+///         if self.value == other.value { 0 } else { 1 }
+///     }
+/// }
+///
+/// /// Observe only the parity of the value.
+/// #[derive(Debug, Clone)]
+/// struct ParityObserver;
+///
+/// impl Observation<BitState> for ParityObserver {
+///     type Output = u8;
+///
+///     fn observe(&self, state: &BitState) -> Self::Output {
+///         state.value % 2
+///     }
+/// }
+///
+/// let state = BitState { value: 3 };
+/// let observer = ParityObserver;
+/// assert_eq!(observer.observe(&state), 1);
+/// ```
 pub trait Observation<S: State> {
     /// The type of observation values produced by this operator.
     ///
@@ -137,6 +184,7 @@ pub trait Observation<S: State> {
 /// // For any State type, IdentityObserver returns the canonical encoding.
 /// let observer = IdentityObserver;
 /// let encoding = observer.observe(&state);
+/// assert_eq!(encoding, vec![0, 1, 0, 1]);
 /// ```
 pub struct IdentityObserver;
 
@@ -180,7 +228,8 @@ impl<S: State> Observation<S> for IdentityObserver {
 /// let state = MyState { data: vec![0, 1, 0, 1] };
 /// let observer = WindowedObserver::new(IdentityObserver, 3);
 /// // observes all three states
-/// observer.observe_window(&[state.clone(), state.clone(), state.clone()]);
+/// let result = observer.observe_window(&[state.clone(), state.clone(), state.clone()]);
+/// assert_eq!(result, [[0, 1, 0, 1]; 3].to_vec());
 /// ```
 pub struct WindowedObserver<S: State, O: Observation<S>> {
     inner: O,

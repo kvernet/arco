@@ -20,9 +20,6 @@ pub type NullEnsembles<U> = Vec<Vec<Vec<ObsOutput<U>>>>;
 
 // === Cycle types ===
 
-/// Rule generator function: produces (rules, structured_ratio) from an RNG.
-pub type RuleGenerator<U> = dyn FnMut(&mut dyn Rng) -> (Vec<<U as InformationUniverse>::Rule>, f64);
-
 /// Boolean function tester: maps rule sets to gate validation counts.
 pub type BooleanTester<U> = dyn Fn(&[<U as InformationUniverse>::Rule]) -> HashMap<String, usize>;
 
@@ -33,14 +30,6 @@ pub type TestEnsembles<U> = Vec<Vec<Vec<ObsOutput<U>>>>;
 
 /// Structural condition predicate on rule sets.
 pub type ConditionPredicate<R> = dyn Fn(&[R]) -> bool + Send + Sync;
-
-/// Metric function computing emergence scores from trajectories.
-pub type MetricFn<T> = dyn Fn(&[Vec<T>]) -> f64 + Send + Sync;
-
-// === Graph substrate types ===
-
-/// Observer function for BinaryGraphState.
-pub type GraphObserverFn = dyn Fn(&BinaryGraphState) -> Vec<u8> + Sync;
 
 // Functions for RewriteRule
 pub type ConditionFn = Arc<dyn Fn(&BinaryGraphState, usize) -> Option<MatchInfo> + Send + Sync>;

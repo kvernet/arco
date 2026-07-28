@@ -5,113 +5,28 @@
 //!     Hypothesize → Predict → Test → Revise. Each cycle produces
 //!     a Research Record.
 //!
-//! # Design
+//! # Quick start
 //!
-//! The cycle is fully generic over any [`InformationUniverse`] type.
-//! It does not know about graph rewriting, cellular automata, or
-//! any specific substrate.
-//!
-//! # Usage
-//!
-//! ```rust
-//! use arco::{
-//!     cycle::{CycleConfig, run_cycle},
-//!     hypotheses::Hypothesis,
-//!     rules::Rule,
-//!     schedule::Schedule,
-//!     substrates::graph::{BinaryGraphState, MatchInfo, RewriteRule, observation::CompoundObserver},
-//!     universe::InformationUniverse,
+//! ```rust,no_run
+//! use arco::cycle::{CycleConfig, run_cycle};
+//! use arco::substrates::graph::{
+//!     BinaryGraphUniverse, generate_standard_hypotheses,
 //! };
+//! use rand::{rngs::StdRng, SeedableRng};
 //!
-//! fn main() {
-//!     let universe = MyUniverse {
-//!         states: vec![],
-//!         rules: vec![],
-//!         observation: CompoundObserver,
-//!         schedule: SeqSchedule,
-//!     };
-//!     let config = CycleConfig::default();
-//!     let mut hypotheses = vec![
-//!         Hypothesis::new("H1", |_rules| true, "storage", "H1 desc", 1.0),
-//!         Hypothesis::new("H2", |_| true, "storage", "H2 desc", 0.5),
-//!     ];
-//!     let record = run_cycle(
-//!         &universe,
-//!         &config,
-//!         &mut hypotheses,
-//!         &mut |_| (vec![], 0.0),
-//!         None,
-//!     );
-//!
-//!     println!("{}", record.summary());
-//! }
-//!
-//! #[derive(Debug)]
-//! struct SeqSchedule;
-//!
-//! impl Schedule<BinaryGraphState, RewriteRule> for SeqSchedule {
-//!     fn name(&self) -> &str {
-//!         "Schedule"
-//!     }
-//!
-//!     fn selection(&self) -> &str {
-//!         "exhaustive"
-//!     }
-//!
-//!     fn timing(&self) -> &str {
-//!         "asynchronous"
-//!     }
-//!
-//!     fn step(
-//!         &self,
-//!         state: &BinaryGraphState,
-//!         rules: &[RewriteRule],
-//!         rng: &mut dyn rand::prelude::Rng,
-//!     ) -> BinaryGraphState {
-//!         let mut current = state.clone();
-//!         let context = MatchInfo::Unconditional { vertex: 0 };
-//!         for rule in rules {
-//!             current = rule.apply(state, &context, rng);
-//!         }
-//!         current
-//!     }
-//! }
-//!
-//! struct MyUniverse {
-//!     states: Vec<BinaryGraphState>,
-//!     rules: Vec<RewriteRule>,
-//!     observation: CompoundObserver,
-//!     schedule: SeqSchedule,
-//! }
-//!
-//! impl InformationUniverse for MyUniverse {
-//!     type State = BinaryGraphState;
-//!     type Rule = RewriteRule;
-//!     type Observation = CompoundObserver;
-//!     type Schedule = SeqSchedule;
-//!
-//!     fn state_space(&self) -> &[Self::State] {
-//!         &self.states
-//!     }
-//!
-//!     fn rules(&self) -> &[Self::Rule] {
-//!         &self.rules
-//!     }
-//!
-//!     fn observation(&self) -> &Self::Observation {
-//!         &self.observation
-//!     }
-//!
-//!     fn schedule(&self) -> &Self::Schedule {
-//!         &self.schedule
-//!     }
-//!
-//!     fn null_rules(&self, _rng: &mut dyn rand::prelude::Rng) -> Vec<Self::Rule> {
-//!         vec![]
-//!     }
-//! }
+//! let mut rng = StdRng::seed_from_u64(42);
+//! let config = CycleConfig {
+//!     n_train: 20,
+//!     n_test: 5,
+//!     ..CycleConfig::default()
+//! };
+//! let universe = BinaryGraphUniverse::new(3, "compound", &mut rng, config.n_train + config.n_test);
+//! let mut hypotheses = generate_standard_hypotheses();
+//! let record = run_cycle(&universe, &config, &mut hypotheses, None);
+//! println!("{}", record.summary());
 //! ```
 
+use std::hash::Hash;
 use std::time::Instant;
 
 use rand::RngExt;
@@ -130,7 +45,6 @@ use crate::observation::Observation;
 use crate::record::{HypothesisRecord, ResearchRecord, UniverseResult};
 use crate::rules::Rule;
 use crate::types::BooleanTester;
-use crate::types::RuleGenerator;
 use crate::types::TestEnsembles;
 use crate::universe::InformationUniverse;
 
@@ -148,7 +62,7 @@ pub struct CycleConfig {
     pub n_train: usize,
     /// Number of held-out test universes.
     pub n_test: usize,
-    /// Ensemble size per universe (trajectories from distinct initial states).
+    /// Ensemble size per universe.
     pub n_ensemble: usize,
     /// Timesteps per trajectory.
     pub steps: usize,
@@ -187,12 +101,10 @@ impl Default for CycleConfig {
 ///
 /// - `U: InformationUniverse` — The universe type. The cycle is fully
 ///   generic over the state, rule, observation, and schedule types.
-///   No restrictions on `Observation::Output` — any hashable,
-///   comparable type works.
 ///
 /// # Steps
 ///
-/// 1. **Generate**: Call `rule_generator` to sample rule sets.
+/// 1. **Generate**: Call `universe.generate_rules()` to sample rule sets.
 /// 2. **Calibrate**: Compute thresholds from destructive null
 ///    universes using `universe.null_rules()`.
 /// 3. **Observe**: Generate ensembles via `generate_trajectories`
@@ -208,13 +120,9 @@ impl Default for CycleConfig {
 ///
 /// * `universe` — The Information Universe to study.
 /// * `config` — Experimental parameters.
-/// * `hypotheses` — Mutable slice of hypotheses to test. Their
-///   `accuracy` and `score` fields will be updated in place.
-/// * `rule_generator` — Function that generates a rule set and its
-///   structured ratio given an RNG. This is substrate-specific.
-/// * `boolean_tester` — Optional function that tests whether a
-///   rule set implements boolean functions. Pass `None` to skip
-///   boolean verification.
+/// * `hypotheses` — Mutable slice of hypotheses to test.
+/// * `boolean_tester` — Optional function that verifies boolean
+///   functions implemented by rule sets. Pass `None` to skip.
 ///
 /// # Returns
 ///
@@ -223,11 +131,10 @@ pub fn run_cycle<U: InformationUniverse>(
     universe: &U,
     config: &CycleConfig,
     hypotheses: &mut [Hypothesis<U::Rule>],
-    rule_generator: &mut RuleGenerator<U>,
     boolean_tester: Option<&BooleanTester<U>>,
 ) -> ResearchRecord<U>
 where
-    <U::Observation as Observation<U::State>>::Output: Eq + std::hash::Hash + Clone + Send + Sync,
+    <U::Observation as Observation<U::State>>::Output: Eq + Hash + Clone + Send + Sync,
     U::Rule: Send + Sync,
     U::State: Send + Sync,
 {
@@ -273,10 +180,10 @@ where
     let mut test_subsets: Vec<(Vec<U::Rule>, f64)> = Vec::with_capacity(config.n_test);
 
     for _ in 0..config.n_train {
-        train_subsets.push(rule_generator(&mut rng));
+        train_subsets.push(universe.generate_rules(&mut rng));
     }
     for _ in 0..config.n_test {
-        test_subsets.push(rule_generator(&mut rng));
+        test_subsets.push(universe.generate_rules(&mut rng));
     }
 
     // ================================================================
@@ -312,7 +219,6 @@ where
     // ================================================================
     // STEP 3: OBSERVE
     // ================================================================
-    // Pre-allocate results vector for parallelization
     let mut results: Vec<UniverseResult> = (0..train_subsets.len())
         .map(|i| UniverseResult {
             universe_id: i,
@@ -325,7 +231,6 @@ where
         })
         .collect();
 
-    // Parallel observation
     results
         .par_iter_mut()
         .zip(train_subsets.par_iter())
@@ -349,9 +254,9 @@ where
             let ensemble = generate_trajectories(
                 &initial_states,
                 rules,
-                config.steps,
-                schedule,
                 observer,
+                schedule,
+                config.steps,
                 config.seed + i as u64 * 137,
             );
 
@@ -376,13 +281,9 @@ where
     // ================================================================
     // STEP 4: HYPOTHESIZE & TEST
     // ================================================================
-    // Generate test ensembles
-
-    // Pre-allocate test ensembles
     let mut test_ensembles: TestEnsembles<U> =
         (0..test_subsets.len()).map(|_| Vec::new()).collect();
 
-    // Generate test ensembles in parallel
     test_ensembles
         .par_iter_mut()
         .zip(test_subsets.par_iter())
@@ -406,16 +307,13 @@ where
             *ensemble_out = generate_trajectories(
                 &initial_states,
                 rules,
-                config.steps,
-                schedule,
                 observer,
+                schedule,
+                config.steps,
                 config.seed + 10000 + i as u64 * 137,
             );
         });
 
-    // Test each hypothesis directly.
-    // The compiler monomorphizes the correct metric function for the
-    // concrete Observation::Output type.
     for h in hypotheses.iter_mut() {
         let threshold = record
             .thresholds

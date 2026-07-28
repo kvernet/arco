@@ -9,16 +9,16 @@
 //! # The InformationUniverse trait
 //!
 //! A type implementing `InformationUniverse` represents a complete
-//! experimental system. It owns or references:
+//! experimental system. It provides:
 //!
-//! - **S** (state space): A collection of possible states, accessed
-//!   via `state_space()`.
-//! - **T** (transformation set): The rules available for evolution,
-//!   accessed via `rules()`.
-//! - **O** (observation operators): How states are perceived, accessed
-//!   via `observation()`.
-//! - **K** (update schedule): The temporal structure, accessed via
-//!   `schedule()`.
+//! - **S** (state space): A collection of possible states for
+//!   sampling initial conditions, via [`state_space()`].
+//! - **T** (transformation set): Rules generated on demand via
+//!   [`generate_rules()`] and [`null_rules()`].
+//! - **O** (observation operators): How states are perceived, via
+//!   [`observation()`].
+//! - **K** (update schedule): The temporal structure, via
+//!   [`schedule()`].
 //!
 //! **R** (resource constraints) and **I** (invariant structure) are
 //! not yet represented in the trait — they are placeholders for
@@ -26,7 +26,7 @@
 //!
 //! # Why a trait?
 //!
-//! The scientific cycle (`run_cycle`) operates on any type that
+//! The scientific cycle ([`run_cycle`]) operates on any type that
 //! implements `InformationUniverse`. This means:
 //!
 //! - The Binary Graph Universe, Cellular Automata, and user-defined
@@ -35,132 +35,67 @@
 //! - New substrates require only trait implementations, not changes
 //!   to ARCO's core.
 //!
-//! # Implementing InformationUniverse
+//! # Quick start
 //!
 //! ```rust
-//! use arco::observation::Observation;
-//! use arco::rules::{NoContext, Rule};
-//! use arco::schedule::Schedule;
 //! use arco::state::State;
+//! use arco::rules::{Rule, NoContext};
+//! use arco::observation::Observation;
+//! use arco::schedule::SequentialSchedule;
 //! use arco::universe::InformationUniverse;
+//! use rand::{Rng, RngExt};
 //!
-//! use rand::Rng;
+//! #[derive(Clone, PartialEq, Eq, Hash, Debug)]
+//! struct BitState { value: u8 }
 //!
-//! fn main() {
-//!     let universe = MyUniverse {
-//!         states: vec![],
-//!         rules: vec![],
-//!         observer: MyObserver,
-//!         schedule: MySchedule,
-//!     };
-//!
-//!     println!("{:?}", universe);
-//! }
-//!
-//! #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-//! struct MyState {
-//!     data: Vec<u8>,
-//! }
-//!
-//! impl State for MyState {
+//! impl State for BitState {
 //!     type Encoding = Vec<u8>;
-//!
-//!     fn canonical_encoding(&self) -> Self::Encoding {
-//!         self.data.clone()
-//!     }
-//!
+//!     fn canonical_encoding(&self) -> Self::Encoding { vec![self.value] }
 //!     fn distance(&self, other: &Self) -> u32 {
-//!         let mut d = 0u32;
-//!         for (a, b) in self.data.iter().zip(other.data.iter()) {
-//!             if a != b {
-//!                 d += 1;
-//!             }
-//!         }
-//!
-//!         d
+//!         if self.value == other.value { 0 } else { 1 }
 //!     }
 //! }
 //!
-//! #[derive(Clone, Debug)]
-//! struct MyRule;
-//!
-//! impl Rule<MyState> for MyRule {
+//! #[derive(Debug, Clone)]
+//! struct FlipRule;
+//! impl Rule<BitState> for FlipRule {
 //!     type Context = NoContext;
-//!
-//!     fn name(&self) -> &str {
-//!         "Rule"
-//!     }
-//!
-//!     fn apply(&self, state: &MyState, _context: &Self::Context, _rng: &mut dyn Rng) -> MyState {
-//!         state.clone()
+//!     fn name(&self) -> &str { "Flip" }
+//!     fn apply(&self, state: &BitState, _ctx: &NoContext, _rng: &mut dyn Rng) -> BitState {
+//!         BitState { value: 1 - state.value }
 //!     }
 //! }
 //!
-//! #[derive(Debug)]
-//! struct MyObserver;
-//!
-//! impl Observation<MyState> for MyObserver {
-//!     type Output = Vec<u8>;
-//!
-//!     fn observe(&self, state: &MyState) -> Self::Output {
-//!         state.data.clone()
-//!     }
+//! #[derive(Debug, Clone)]
+//! struct BitObserver;
+//! impl Observation<BitState> for BitObserver {
+//!     type Output = u8;
+//!     fn observe(&self, state: &BitState) -> Self::Output { state.value }
 //! }
 //!
-//! #[derive(Debug)]
-//! struct MySchedule;
-//!
-//! impl Schedule<MyState, MyRule> for MySchedule {
-//!     fn name(&self) -> &str {
-//!         "Schedule"
-//!     }
-//!
-//!     fn selection(&self) -> &str {
-//!         "exhaustive"
-//!     }
-//!
-//!     fn timing(&self) -> &str {
-//!         "asynchronous"
-//!     }
-//!
-//!     fn step(&self, state: &MyState, rules: &[MyRule], rng: &mut dyn Rng) -> MyState {
-//!         let mut current = state.clone();
-//!         let context = NoContext;
-//!         for rule in rules {
-//!             current = rule.apply(state, &context, rng);
-//!         }
-//!         current
-//!     }
-//! }
-//!
-//! #[derive(Debug)]
 //! struct MyUniverse {
-//!     states: Vec<MyState>,
-//!     rules: Vec<MyRule>,
-//!     observer: MyObserver,
-//!     schedule: MySchedule,
+//!     states: Vec<BitState>,
+//!     schedule: SequentialSchedule,
 //! }
 //!
 //! impl InformationUniverse for MyUniverse {
-//!     type State = MyState;
-//!     type Rule = MyRule;
-//!     type Observation = MyObserver;
-//!     type Schedule = MySchedule;
+//!     type State = BitState;
+//!     type Rule = FlipRule;
+//!     type Observation = BitObserver;
+//!     type Schedule = SequentialSchedule;
 //!
-//!     fn state_space(&self) -> &[Self::State] {
-//!         &self.states
+//!     fn state_space(&self) -> &[Self::State] { &self.states }
+//!     fn observation(&self) -> &Self::Observation { &BitObserver }
+//!     fn schedule(&self) -> &Self::Schedule { &self.schedule }
+//!
+//!     fn generate_rules(&self, rng: &mut dyn Rng) -> (Vec<Self::Rule>, f64) {
+//!         let n = rng.random_range(1..=3);
+//!         let rules: Vec<FlipRule> = (0..n).map(|_| FlipRule).collect();
+//!         (rules, 1.0)
 //!     }
-//!     fn rules(&self) -> &[Self::Rule] {
-//!         &self.rules
-//!     }
-//!     fn observation(&self) -> &Self::Observation {
-//!         &self.observer
-//!     }
-//!     fn schedule(&self) -> &Self::Schedule {
-//!         &self.schedule
-//!     }
+//!
 //!     fn null_rules(&self, _rng: &mut dyn Rng) -> Vec<Self::Rule> {
-//!         self.rules.to_vec()
+//!         vec![FlipRule] // flipping is maximally destructive in this universe
 //!     }
 //! }
 //! ```
@@ -195,8 +130,6 @@ use crate::state::State;
 ///   extensions.
 /// - The trait uses associated types rather than generic parameters
 ///   so that a single type can represent a complete universe.
-///   `run_cycle::<U: InformationUniverse>(&config)` is cleaner than
-///   `run_cycle::<S, R, O, K>(&config)`.
 pub trait InformationUniverse {
     /// The state type for this universe.
     type State: State;
@@ -213,12 +146,7 @@ pub trait InformationUniverse {
     /// The state space — a collection of possible states.
     ///
     /// Used for sampling initial conditions for ensemble generation.
-    /// May be the full state space (for small universes) or a
-    /// representative sample (for large universes).
     fn state_space(&self) -> &[Self::State];
-
-    /// The transformation rules available in this universe.
-    fn rules(&self) -> &[Self::Rule];
 
     /// The observation operator for this universe.
     ///
@@ -230,32 +158,29 @@ pub trait InformationUniverse {
     /// The update schedule for this universe.
     ///
     /// Defines the temporal order and selection of rule applications.
-    /// Two universes differing only in schedule are distinct objects
-    /// of study.
     fn schedule(&self) -> &Self::Schedule;
+
+    /// Generate a rule set for this universe.
+    ///
+    /// Returns a tuple of (rules, structured_ratio) where
+    /// `structured_ratio` is a substrate-specific measure of how
+    /// "structured" the rule set is (0.0 = purely destructive,
+    /// 1.0 = purely structured). This is used for spectrum analysis
+    /// and hypothesis testing.
+    ///
+    /// # Arguments
+    /// * `rng` — Random number generator for stochastic rule selection.
+    fn generate_rules(&self, rng: &mut dyn Rng) -> (Vec<Self::Rule>, f64);
 
     /// Generate a destructive rule set for null-distribution calibration.
     ///
     /// Destructive rules should destroy information — they represent
-    /// the null hypothesis against which emergence is measured. What
-    /// "destructive" means is substrate-specific:
-    ///
-    /// - In a graph rewriting universe, destructive rules scramble
-    ///   vertex labels or randomize edge structure.
-    /// - In a cellular automaton, destructive rules are the most
-    ///   chaotic rules that rapidly destroy initial conditions.
-    /// - In a symbolic universe, destructive rules replace terms
-    ///   with random expressions.
-    ///
-    /// The calibration pipeline calls this method to generate null
-    /// universes. Each null universe should contain at least one
-    /// strongly destructive rule to prevent degenerate constant
-    /// states from inflating the null distribution.
+    /// the null hypothesis against which emergence is measured.
+    /// Each null universe should contain at least one strongly
+    /// destructive rule to prevent degenerate constant states from
+    /// inflating the null distribution.
     ///
     /// # Arguments
     /// * `rng` — Random number generator for stochastic rule selection.
-    ///
-    /// # Returns
-    /// A vector of rules that destroy information in this substrate.
     fn null_rules(&self, rng: &mut dyn Rng) -> Vec<Self::Rule>;
 }

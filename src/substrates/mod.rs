@@ -22,4 +22,5 @@
 //! ARCO pipeline — metrics, calibration, hypotheses, and the
 //! scientific cycle — without modifying ARCO's core.
 
+pub mod ca;
 pub mod graph;

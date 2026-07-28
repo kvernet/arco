@@ -37,12 +37,15 @@
 //!   encoding: `s1 == s2` if and only if
 //!   `s1.canonical_encoding() == s2.canonical_encoding()`.
 //!
-//! # Implementing State
+//! # Quick start
+//!
+//! Implement `State` for your type to use it with ARCO's metrics,
+//! calibration, and scientific cycle:
 //!
 //! ```rust
 //! use arco::state::State;
 //!
-//! #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+//! #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 //! struct MyState {
 //!     data: Vec<u8>,
 //! }
@@ -53,22 +56,13 @@
 //!     fn canonical_encoding(&self) -> Self::Encoding {
 //!         self.data.clone()
 //!     }
+//!
 //!     fn distance(&self, other: &Self) -> u32 {
-//!         self.data
-//!             .iter()
+//!         self.data.iter()
 //!             .zip(other.data.iter())
 //!             .map(|(a, b)| if a != b { 1 } else { 0 })
 //!             .sum()
 //!     }
-//! }
-//!
-//! fn main() {
-//!     let state = MyState {
-//!         data: vec![0, 1, 0, 0, 0, 1],
-//!     };
-//!
-//!     assert_eq!(state.canonical_encoding(), vec![0, 1, 0, 0, 0, 1]);
-//!     assert_eq!(state.distance(&state), 0);
 //! }
 //! ```
 //!
@@ -78,6 +72,9 @@
 //!
 //! - [`arco::substrates::graph::BinaryGraphState`] — directed graphs
 //!   with binary vertex labels and binary edge labels.
+//! - [`arco::substrates::ca::CAState`] — 1D binary cellular automaton
+//!   with periodic boundary conditions. Each state is a fixed-length
+//!   binary tuple representing the cells at a single timestep.
 //!
 //! Users define their own state types by implementing this trait.
 
@@ -98,31 +95,12 @@ use std::hash::Hash;
 ///   choices are `Vec<u8>`, `(Vec<u8>, Vec<u8>)`, or a custom
 ///   deterministic representation.
 ///
-/// # Examples
+/// # Example
 ///
 /// ```rust
 /// use arco::state::State;
 ///
-/// fn main() {
-///     let state1 = CounterState { value: 0 };
-///     let state2 = CounterState { value: 1 };
-///     let state3 = CounterState { value: 0 };
-///     let state4 = state2.clone();
-///
-///     assert_eq!(state2.canonical_encoding(), state4.canonical_encoding());
-///     assert_eq!(state1.canonical_encoding(), state3.canonical_encoding());
-///     assert!(state1.canonical_encoding() != state2.canonical_encoding());
-///
-///     // Not identity d(s, s) != 0
-///     assert_eq!(state1.distance(&state1), 1);
-///     // Symetry d(s2, s1) = d(s1, s2)
-///     assert_eq!(state2.distance(&state1), state1.distance(&state2));
-///
-///     println!("{:?}", state1);
-///     println!("{:?}", state2);
-/// }
-///
-/// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 /// struct CounterState {
 ///     value: u8,
 /// }
@@ -135,9 +113,14 @@ use std::hash::Hash;
 ///     }
 ///
 ///     fn distance(&self, other: &Self) -> u32 {
-///         if self.value == other.value { 1 } else { 0 }
+///         if self.value == other.value { 0 } else { 1 }
 ///     }
 /// }
+///
+/// let s1 = CounterState { value: 0 };
+/// let s2 = CounterState { value: 1 };
+/// assert_eq!(s1.distance(&s2), 1);
+/// assert_eq!(s1.distance(&s1), 0);
 /// ```
 pub trait State: Clone + Eq + Hash + Send + Sync + Debug {
     /// The type of the canonical encoding.

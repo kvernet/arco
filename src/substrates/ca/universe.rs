@@ -1,0 +1,191 @@
+//! Cellular Automaton Universe — the CA substrate.
+//!
+//! This module provides [`CAUniverse`], which bundles the CA state
+//! space, rules, observation operators, and schedule into a single
+//! type implementing [`InformationUniverse`].
+//!
+//! # Type parameters
+//!
+//! - `N`: Number of cells (typically 8 for elementary CA).
+//! - `R`: Neighborhood radius (default 1).
+
+use rand::{Rng, RngExt};
+
+use crate::substrates::ca::observation::CAObserver;
+use crate::substrates::ca::rules::CARule;
+use crate::substrates::ca::schedule::SynchronousCASchedule;
+use crate::substrates::ca::state::CAState;
+use crate::universe::InformationUniverse;
+
+// ===================================================================
+// CAUniverse
+// ===================================================================
+
+/// The Cellular Automaton Universe.
+///
+/// Bundles 1D binary cellular automata with periodic boundaries,
+/// lookup-table rules, observation operators, and synchronous
+/// schedule into a complete Information Universe.
+///
+/// # Type parameters
+/// - `N`: Number of cells. State space = 2^N.
+/// - `R`: Neighborhood radius (default 1). Rule space = 2^(2^(2R+1)).
+///
+/// # Usage
+///
+/// ```rust,no_run
+/// use arco::substrates::ca::CAUniverse;
+/// use arco::cycle::{CycleConfig, run_cycle};
+/// use rand::SeedableRng;
+/// use rand::rngs::StdRng;
+///
+/// let mut rng = StdRng::seed_from_u64(42);
+/// let universe = CAUniverse::<8, 1>::new("full_state", &mut rng, 400);
+/// let config = CycleConfig::default();
+/// let mut hypotheses = vec![];
+/// let record = run_cycle(&universe, &config, &mut hypotheses, None);
+/// ```
+
+#[derive(Debug, Clone)]
+pub struct CAUniverse<const N: usize, const R: usize = 1> {
+    state_space: Vec<CAState<N, R>>,
+    /// Pre-generated rule sets for reproducible experiments
+    rules: Vec<CARule<N, R>>,
+    observer: CAObserver,
+    schedule: SynchronousCASchedule,
+    rule_index: std::cell::Cell<usize>,
+}
+
+impl<const N: usize, const R: usize> CAUniverse<N, R> {
+    /// Create a new CAUniverse.
+    ///
+    /// # Arguments
+    /// * `obs_name` — Observation operator name. One of: `"full_state"`,
+    ///   `"density"`, `"parity"`.
+    /// * `rng` — Random number generator for state space and rule generation.
+    /// * `n_rules` — Number of rules to pre-generate.
+    pub fn new(obs_name: &str, rng: &mut impl Rng, n_rules: usize) -> Self {
+        let state_space: Vec<CAState<N, R>> =
+            (0..500).map(|_| CAState::<N, R>::random(rng)).collect();
+
+        // Generate rules across the spectrum: some Wolfram, some random
+        let mut rules = Vec::with_capacity(n_rules);
+        if R == 1 {
+            // For elementary CA, include all 256 Wolfram rules
+            for wn in 0..=255u64 {
+                rules.push(CARule::<N, R>::from_wolfram_number(wn));
+            }
+        }
+        // Fill remaining with random rules
+        while rules.len() < n_rules {
+            rules.push(CARule::<N, R>::random(rng));
+        }
+
+        Self {
+            state_space,
+            rules,
+            observer: CAObserver::from_name(obs_name),
+            schedule: SynchronousCASchedule::new(),
+            rule_index: std::cell::Cell::new(0),
+        }
+    }
+
+    /// Name of the observation operator.
+    pub fn obs_name(&self) -> &str {
+        self.observer.name()
+    }
+}
+
+impl<const N: usize, const R: usize> InformationUniverse for CAUniverse<N, R> {
+    type State = CAState<N, R>;
+    type Rule = CARule<N, R>;
+    type Observation = CAObserver;
+    type Schedule = SynchronousCASchedule;
+
+    fn state_space(&self) -> &[Self::State] {
+        &self.state_space
+    }
+
+    fn observation(&self) -> &Self::Observation {
+        &self.observer
+    }
+
+    fn schedule(&self) -> &Self::Schedule {
+        &self.schedule
+    }
+
+    fn generate_rules(&self, _rng: &mut dyn Rng) -> (Vec<Self::Rule>, f64) {
+        // Cycle through pre-generated rules.
+        // For R=1, structured_ratio is based on lambda (Langton parameter).
+        let index = self.rule_index.get();
+        let rule = self.rules[index % self.rules.len()].clone();
+        self.rule_index.set(index + 1);
+
+        // Compute structured_ratio from measurable properties.
+        // Low lambda (ordered) or high lambda (chaotic) → less "structured."
+        // Mid-lambda (complex) → more "structured."
+        let lambda = rule.lambda();
+        let structured_ratio = if !(0.2..0.8).contains(&lambda) {
+            0.2 // ordered or chaotic
+        } else {
+            0.8 // complex regime
+        };
+
+        (vec![rule], structured_ratio)
+    }
+
+    fn null_rules(&self, rng: &mut dyn Rng) -> Vec<Self::Rule> {
+        // Null rules: the most chaotic rules (lambda near 0.5, high sensitivity).
+        // For R=1, Rule 30 is the canonical chaotic rule.
+        if R == 1 {
+            vec![CARule::<N, R>::from_wolfram_number(30)]
+        } else {
+            // For larger radii, generate random rules as null
+            let size = rng.random_range(1..=3);
+            (0..size).map(|_| CARule::<N, R>::random(rng)).collect()
+        }
+    }
+}
+
+// ===================================================================
+// Tests
+// ===================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::Rule;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    #[test]
+    fn test_create_universe() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let universe = CAUniverse::<8, 1>::new("full_state", &mut rng, 300);
+        assert_eq!(universe.obs_name(), "full_state");
+        assert_eq!(universe.state_space().len(), 500);
+    }
+
+    #[test]
+    fn test_generate_rules_produces_valid_rule() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let universe = CAUniverse::<8, 1>::new("full_state", &mut rng, 300);
+        let mut test_rng = StdRng::seed_from_u64(0);
+
+        let (rules, ratio) = universe.generate_rules(&mut test_rng);
+        assert_eq!(rules.len(), 1);
+        assert!(ratio >= 0.0 && ratio <= 1.0);
+        assert!(rules[0].name().contains("Rule"));
+    }
+
+    #[test]
+    fn test_null_rules_for_r1_is_rule30() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let universe = CAUniverse::<8, 1>::new("full_state", &mut rng, 300);
+        let mut test_rng = StdRng::seed_from_u64(0);
+
+        let rules = universe.null_rules(&mut test_rng);
+        assert_eq!(rules.len(), 1);
+        assert!(rules[0].name().contains("Rule 30"));
+    }
+}

@@ -22,6 +22,8 @@
 //! This keeps calibration substrate-independent — each universe
 //! defines what "destructive" means for its substrate.
 
+use std::hash::Hash;
+
 use crate::metrics::{compute_memory, compute_persistence, compute_storage};
 use crate::observation::Observation;
 use crate::types::NullEnsembles;
@@ -116,9 +118,9 @@ where
         let ensemble = generate_trajectories(
             &initial_states,
             &rules,
-            steps,
-            schedule,
             observer,
+            schedule,
+            steps,
             seed + i as u64 * 1000,
         );
 
@@ -136,13 +138,13 @@ where
 ///
 /// This is the generic trajectory generator used by both calibration
 /// and the scientific cycle. It is substrate-independent — it works
-/// with any `State`, `Rule`, `Schedule`, and `Observation` types.
-pub fn generate_trajectories<S, R, K, O>(
+/// with any `State`, `Rule`, `Observation`, and `Schedule` types.
+pub fn generate_trajectories<S, R, O, K>(
     initial_states: &[S],
     rules: &[R],
-    steps: usize,
-    schedule: &K,
     observer: &O,
+    schedule: &K,
+    steps: usize,
     base_seed: u64,
 ) -> Vec<Vec<O::Output>>
 where
@@ -222,14 +224,8 @@ impl NullStats {
 ///
 /// # Parameters
 /// * `null_ensembles` — Null trajectory ensembles.
-/// * `percentile` — Percentile for threshold (0–100).
-/// * `floor_persistence` — Engineering floor for persistence.
-/// * `floor_storage` — Engineering floor for storage.
-/// * `floor_memory` — Engineering floor for memory.
-/// * `max_delta` — Maximum timescale for storage/memory.
-/// * `n_shuffles` — Number of shuffles for bias correction.
-/// * `seed` — Seed for shuffle RNG.
-pub fn calibrate_thresholds<T: Eq + std::hash::Hash + Clone>(
+/// * `config` — Calibration config.
+pub fn calibrate_thresholds<T: Eq + Hash + Clone>(
     null_ensembles: &[Vec<Vec<T>>],
     config: &CalibrationConfig,
 ) -> CalibrationResult {

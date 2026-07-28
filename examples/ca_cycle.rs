@@ -1,9 +1,19 @@
-use std::collections::HashMap;
+//! Cellular Automaton — Full Scientific Cycle
+//!
+//! This example runs the complete ARCO pipeline on the Cellular
+//! Automaton substrate, demonstrating paradigm-neutrality: the
+//! same `run_cycle` function used for the Binary Graph Universe
+//! operates on CA without modification.
+//!
+//! # Running
+//!
+//! ```bash
+//! cargo run --example ca_cycle --release
+//! cargo run --example ca_cycle --release -- 42
+//! ```
 
 use arco::cycle::{CycleConfig, run_cycle};
-use arco::substrates::graph::{
-    BinaryGraphUniverse, generate_standard_hypotheses, verify_boolean_functions,
-};
+use arco::substrates::ca::{CAUniverse, generate_ca_hypotheses};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
@@ -14,44 +24,33 @@ fn main() {
         .unwrap_or(42);
 
     println!(
-        "=== ARCO Binary Graph Universe — Full Cycle (seed={}) ===\n",
+        "=== ARCO Cellular Automaton — Full Cycle (seed={}) ===\n",
         seed
     );
 
     let mut rng = StdRng::seed_from_u64(seed);
-    let n_train = 1000;
-    let n_test = 300;
-    let universe = BinaryGraphUniverse::new(3, "compound", &mut rng, n_train + n_test);
+    let universe = CAUniverse::<8, 1>::new("full_state", &mut rng, 400);
 
-    let mut hypotheses = generate_standard_hypotheses();
-
-    let boolean_tester =
-        |rules: &[arco::substrates::graph::RewriteRule]| -> HashMap<String, usize> {
-            let verified = verify_boolean_functions(rules, 8, 5);
-            verified.into_iter().map(|name| (name, 1)).collect()
-        };
+    let mut hypotheses = generate_ca_hypotheses::<8, 1>();
 
     let config = CycleConfig {
-        n_train,
-        n_test,
+        n_train: 256,
+        n_test: 50,
         seed,
         ..CycleConfig::default()
     };
 
-    let record = run_cycle(&universe, &config, &mut hypotheses, Some(&boolean_tester));
+    let record = run_cycle(&universe, &config, &mut hypotheses, None);
 
     // Print storage spectrum
     println!("\nStorage Spectrum:");
     let storage_threshold = record.thresholds.get("storage").copied().unwrap_or(0.0);
     let brackets: &[(&str, f64, f64)] = &[
-        ("Noise", 0.00, 0.15),
-        ("Noise-dominated", 0.15, 0.40),
-        ("Balanced", 0.40, 0.60),
-        ("Structure-dominated", 0.60, 0.85),
-        ("Structured", 0.85, 1.01),
+        ("Low structure (0.0--0.3)", 0.0, 0.3),
+        ("High structure (0.7--1.0)", 0.7, 1.0),
     ];
     println!(
-        "  {:<20} {:<6} {:<8} {:<8}",
+        "  {:<30} {:<6} {:<8} {:<8}",
         "Class", "n", "Stor%", "MeanStor"
     );
     for (label, low, high) in brackets {
@@ -72,7 +71,7 @@ fn main() {
             / n as f64;
         let mean_stor = group.iter().map(|r| r.storage).sum::<f64>() / n as f64;
         println!(
-            "  {:<20} {:<6} {:<8.1} {:<8.4}",
+            "  {:<30} {:<6} {:<8.1} {:<8.4}",
             label, n, stor_pct, mean_stor
         );
     }

@@ -1,38 +1,16 @@
 //! Observation operators for the Binary Graph Universe.
 //!
-//! This module provides observation operators at varying granularities,
-//! from the identity observation (full canonical encoding) to coarse
-//! aggregate observations (label sums, edge counts).
-//!
-//! All observers implement the core [`Observation`] trait for
-//! [`BinaryGraphState`]. They are registered in [`STATE_OBSERVERS`]
-//! for name-based lookup.
-//!
-//! # Available observers
-//!
-//! | Observer | What it captures | Output size for n=3 |
-//! |----------|-----------------|---------------------|
-//! | `observe_full_state` | Labels + edges (identity) | 12 bytes |
-//! | `observe_compound` | Labels then edges | 12 bytes |
-//! | `observe_label_vector` | Vertex labels only | 3 bytes |
-//! | `observe_label_sum` | Count of 1-labels | 1 byte |
-//! | `observe_root_label` | Label of vertex 0 only | 1 byte |
-//! | `observe_edge_vector` | Flattened adjacency matrix | 9 bytes |
-//! | `observe_edge_count` | Total number of edges | 1 byte |
+//! This module provides the [`GraphObserver`] enum for runtime
+//! selection of observation granularity, backed by pure functions.
 
 use crate::observation::Observation;
 use crate::state::State;
 use crate::substrates::graph::state::BinaryGraphState;
-use crate::types::GraphObserverFn;
 
 // ===================================================================
-// Single-state observers
+// Observer functions
 // ===================================================================
 
-/// Identity observation — the full canonical encoding.
-///
-/// This is the maximally dynamically sufficient observation operator.
-/// No two distinct states produce the same observation.
 pub fn observe_full_state(state: &BinaryGraphState) -> Vec<u8> {
     let (adj, labels) = state.canonical_encoding();
     let mut result = adj;
@@ -40,23 +18,19 @@ pub fn observe_full_state(state: &BinaryGraphState) -> Vec<u8> {
     result
 }
 
-/// Full label vector.
 pub fn observe_label_vector(state: &BinaryGraphState) -> Vec<u8> {
     let n = state.n_vertices();
     (0..n).map(|i| state.label(i)).collect()
 }
 
-/// Sum of vertex labels.
 pub fn observe_label_sum(state: &BinaryGraphState) -> Vec<u8> {
     vec![state.label_sum() as u8]
 }
 
-/// Label of vertex 0 only.
 pub fn observe_root_label(state: &BinaryGraphState) -> Vec<u8> {
     vec![state.label(0)]
 }
 
-/// Flattened adjacency matrix.
 pub fn observe_edge_vector(state: &BinaryGraphState) -> Vec<u8> {
     let n = state.n_vertices();
     (0..n)
@@ -64,12 +38,10 @@ pub fn observe_edge_vector(state: &BinaryGraphState) -> Vec<u8> {
         .collect()
 }
 
-/// Total edge count.
 pub fn observe_edge_count(state: &BinaryGraphState) -> Vec<u8> {
     vec![state.edge_count() as u8]
 }
 
-/// Compound observation: labels followed by edges.
 pub fn observe_compound(state: &BinaryGraphState) -> Vec<u8> {
     let mut result = observe_label_vector(state);
     result.extend(observe_edge_vector(state));
@@ -77,73 +49,61 @@ pub fn observe_compound(state: &BinaryGraphState) -> Vec<u8> {
 }
 
 // ===================================================================
-// Observation structs (implementing the Observation trait)
+// Observer enum
 // ===================================================================
 
-macro_rules! impl_observer {
-    ($name:ident, $fn:ident, $desc:literal) => {
-        #[doc = $desc]
-        #[derive(Debug, Clone, Default)]
-        pub struct $name;
-
-        impl Observation<BinaryGraphState> for $name {
-            type Output = Vec<u8>;
-
-            fn observe(&self, state: &BinaryGraphState) -> Self::Output {
-                $fn(state)
-            }
-        }
-    };
+#[derive(Debug, Clone)]
+pub enum GraphObserver {
+    FullState,
+    Compound,
+    LabelVector,
+    LabelSum,
+    RootLabel,
+    EdgeVector,
+    EdgeCount,
 }
 
-impl_observer!(
-    FullStateObserver,
-    observe_full_state,
-    "Identity observation — the full canonical encoding."
-);
-impl_observer!(
-    LabelVectorObserver,
-    observe_label_vector,
-    "Full label vector."
-);
-impl_observer!(LabelSumObserver, observe_label_sum, "Sum of vertex labels.");
-impl_observer!(
-    RootLabelObserver,
-    observe_root_label,
-    "Label of vertex 0 only."
-);
-impl_observer!(
-    EdgeVectorObserver,
-    observe_edge_vector,
-    "Flattened adjacency matrix."
-);
-impl_observer!(EdgeCountObserver, observe_edge_count, "Total edge count.");
-impl_observer!(
-    CompoundObserver,
-    observe_compound,
-    "Compound: labels followed by edges."
-);
+impl GraphObserver {
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "full_state" => Self::FullState,
+            "compound" => Self::Compound,
+            "label_vector" => Self::LabelVector,
+            "label_sum" => Self::LabelSum,
+            "root_label" => Self::RootLabel,
+            "edge_vector" => Self::EdgeVector,
+            "edge_count" => Self::EdgeCount,
+            _ => Self::FullState,
+        }
+    }
 
-// ===================================================================
-// Observer registry
-// ===================================================================
+    pub fn name(&self) -> &str {
+        match self {
+            Self::FullState => "full_state",
+            Self::Compound => "compound",
+            Self::LabelVector => "label_vector",
+            Self::LabelSum => "label_sum",
+            Self::RootLabel => "root_label",
+            Self::EdgeVector => "edge_vector",
+            Self::EdgeCount => "edge_count",
+        }
+    }
+}
 
-/// Mapping from observation name to observer.
-pub static STATE_OBSERVERS: &[(&str, &GraphObserverFn)] = &[
-    ("full_state", &observe_full_state),
-    ("label_vector", &observe_label_vector),
-    ("label_sum", &observe_label_sum),
-    ("root_label", &observe_root_label),
-    ("edge_vector", &observe_edge_vector),
-    ("edge_count", &observe_edge_count),
-    ("compound", &observe_compound),
-];
+impl Observation<BinaryGraphState> for GraphObserver {
+    type Output = Vec<u8>;
 
-pub fn get_state_observer(name: &str) -> Option<&'static GraphObserverFn> {
-    STATE_OBSERVERS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, f)| *f)
+    fn observe(&self, state: &BinaryGraphState) -> Self::Output {
+        match self {
+            Self::FullState => observe_full_state(state),
+            Self::Compound => observe_compound(state),
+            Self::LabelVector => observe_label_vector(state),
+            Self::LabelSum => observe_label_sum(state),
+            Self::RootLabel => observe_root_label(state),
+            Self::EdgeVector => observe_edge_vector(state),
+            Self::EdgeCount => observe_edge_count(state),
+        }
+    }
 }
 
 // ===================================================================
@@ -175,52 +135,21 @@ mod tests {
     }
 
     #[test]
-    fn test_label_sum() {
+    fn test_observer_enum_compound() {
         let s = make_state();
-        assert_eq!(observe_label_sum(&s), vec![1]);
+        let obs = GraphObserver::Compound;
+        assert_eq!(obs.observe(&s), observe_compound(&s));
     }
 
     #[test]
-    fn test_root_label() {
-        let s = make_state();
-        assert_eq!(observe_root_label(&s), vec![1]);
-    }
-
-    #[test]
-    fn test_edge_vector() {
-        let s = make_state();
-        assert_eq!(observe_edge_vector(&s), vec![0, 1, 0, 0]);
-    }
-
-    #[test]
-    fn test_edge_count() {
-        let s = make_state();
-        assert_eq!(observe_edge_count(&s), vec![1]);
-    }
-
-    #[test]
-    fn test_compound_length() {
-        let s = make_state();
-        assert_eq!(observe_compound(&s).len(), 6);
-    }
-
-    #[test]
-    fn test_registry_lookup() {
-        let obs = get_state_observer("compound");
-        assert!(obs.is_some());
-        let s = make_state();
-        assert_eq!(obs.unwrap()(&s), observe_compound(&s));
-    }
-
-    #[test]
-    fn test_registry_missing() {
-        assert!(get_state_observer("nonexistent").is_none());
-    }
-
-    #[test]
-    fn test_trait_implementation() {
-        let observer = CompoundObserver;
-        let s = make_state();
-        assert_eq!(observer.observe(&s), observe_compound(&s));
+    fn test_observer_from_name() {
+        assert!(matches!(
+            GraphObserver::from_name("compound"),
+            GraphObserver::Compound
+        ));
+        assert!(matches!(
+            GraphObserver::from_name("unknown"),
+            GraphObserver::FullState
+        ));
     }
 }

@@ -17,6 +17,16 @@
 //!   universe and hypothesis.
 //! - **Serialization**: The record can be serialized to JSON for
 //!   external analysis and archival.
+//!
+//! # Serialization
+//!
+//! Enable the `serialize` feature to serialize research records
+//! to JSON for external analysis and archival:
+//!
+//! ```toml
+//! [dependencies]
+//! arco = { version = "0.3", features = ["serialize"] }
+//! ```
 
 use crate::hypotheses::Hypothesis;
 use crate::universe::InformationUniverse;
@@ -36,6 +46,7 @@ use std::collections::HashMap;
 /// - `U: InformationUniverse` — The universe type this record
 ///   describes.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct ResearchRecord<U: InformationUniverse> {
     /// ARCO version string.
     pub version: String,
@@ -59,6 +70,7 @@ pub struct ResearchRecord<U: InformationUniverse> {
 
 /// Per-universe experimental result.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct UniverseResult {
     /// Universe index in the experiment.
     pub universe_id: usize,
@@ -78,6 +90,7 @@ pub struct UniverseResult {
 
 /// Serialized hypothesis record for the research output.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct HypothesisRecord {
     /// Hypothesis identifier.
     pub name: String,

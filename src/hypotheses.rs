@@ -9,19 +9,63 @@
 //! # Design
 //!
 //! Hypotheses are generic over any rule type. The condition function
-//! receives a slice of rules and returns a boolean. This keeps
-//! hypothesis testing substrate-independent — a hypothesis written
-//! for graph rewriting rules can be applied to cellular automaton
-//! rules without modification, as long as the rule type implements
-//! the necessary trait.
+//! receives a slice of rules and returns a boolean. Testing is
+//! performed by the scientific cycle ([`run_cycle`]), which evaluates
+//! each hypothesis against held-out test universes and computes
+//! accuracy and MDL-penalized scores.
 //!
 //! # Standard hypotheses
 //!
-//! Substrate-specific hypothesis sets (like the Binary Graph
-//! Transport Law) live in their substrate modules. The core
-//! hypothesis infrastructure is substrate-independent.
+//! Substrate-specific hypothesis sets live in their substrate modules.
+//! The core hypothesis infrastructure is substrate-independent.
+//!
+//! # Quick start
+//!
+//! ```rust
+//! use arco::state::State;
+//! use arco::rules::{Rule, NoContext};
+//! use arco::hypotheses::Hypothesis;
+//! use rand::Rng;
+//!
+//! #[derive(Clone, PartialEq, Eq, Hash, Debug)]
+//! struct MyState { value: u8 }
+//!
+//! impl State for MyState {
+//!     type Encoding = Vec<u8>;
+//!     fn canonical_encoding(&self) -> Self::Encoding { vec![self.value] }
+//!     fn distance(&self, other: &Self) -> u32 {
+//!         if self.value == other.value { 0 } else { 1 }
+//!     }
+//! }
+//!
+//! #[derive(Debug, Clone)]
+//! struct MyRule { name: String }
+//!
+//! impl Rule<MyState> for MyRule {
+//!     type Context = NoContext;
+//!     fn name(&self) -> &str { &self.name }
+//!     fn apply(&self, state: &MyState, _ctx: &NoContext, _rng: &mut dyn Rng) -> MyState {
+//!         MyState { value: 1 - state.value }
+//!     }
+//! }
+//!
+//! // Create a hypothesis: rule sets with ≥2 rules → storage
+//! let h: Hypothesis<MyRule> = Hypothesis::new(
+//!     "H_MIN_SIZE",
+//!     |rules: &[MyRule]| rules.len() >= 2,
+//!     "storage",
+//!     "Rule set has at least 2 rules",
+//!     1.0,
+//! );
+//!
+//! // Hypotheses are tested by the scientific cycle.
+//! // Use `run_cycle()` to evaluate them against held-out data.
+//! // The cycle sets `accuracy` and `score` on each hypothesis.
+//! assert_eq!(h.accuracy, 0.0); // not yet tested
+//! assert_eq!(h.property_name, "storage");
+//! ```
 
-use crate::types::{ConditionPredicate, MetricFn};
+use crate::types::ConditionPredicate;
 
 // ===================================================================
 // Hypothesis
@@ -31,22 +75,12 @@ use crate::types::{ConditionPredicate, MetricFn};
 ///
 /// A hypothesis states that rule sets satisfying a structural
 /// condition will exhibit a specified emergent property above
-/// a calibrated threshold.
+/// a calibrated threshold. Hypotheses are tested by the scientific
+/// cycle, which sets `accuracy` and `score` based on held-out data.
 ///
 /// # Type parameters
 ///
-/// - `R`: The rule type. The condition predicate receives `&[R]`.
-///
-/// # Fields
-///
-/// - `name`: Unique identifier (e.g., "H5_TRANSPORT").
-/// - `condition_fn`: Structural predicate on rule sets.
-/// - `property_name`: `"persistence"`, `"storage"`, or `"memory"`.
-/// - `condition_desc`: Human-readable description.
-/// - `complexity`: MDL penalty weight.
-/// - `accuracy`: Set by `test()`. Fraction of held-out universes
-///   where the prediction held.
-/// - `score`: Set by `test()`. Accuracy minus complexity penalty.
+/// - `R`: The rule type.
 pub struct Hypothesis<R> {
     pub name: String,
     pub condition_fn: Box<ConditionPredicate<R>>,
@@ -65,7 +99,7 @@ impl<R> Hypothesis<R> {
     /// * `condition_fn` — Structural predicate `(&[R]) -> bool`.
     /// * `property_name` — `"persistence"`, `"storage"`, or `"memory"`.
     /// * `condition_desc` — Human-readable description.
-    /// * `complexity` — Penalty weight (higher = more complex condition).
+    /// * `complexity` — MDL penalty weight.
     ///
     /// # Panics
     /// Panics if `property_name` is not one of the valid options.
@@ -95,57 +129,11 @@ impl<R> Hypothesis<R> {
         }
     }
 
-    /// Evaluate this hypothesis on held-out data.
-    ///
-    /// For each test universe satisfying the condition, computes
-    /// the predicted metric and checks whether it exceeds the
-    /// calibrated threshold.
-    ///
-    /// # Parameters
-    /// * `test_data` — Held-out data: `(rules, trajectories)` pairs.
-    /// * `metric_fn` — Function computing the predicted metric.
-    /// * `threshold` — Calibrated emergence threshold.
-    ///
-    /// # Returns
-    /// Accuracy: fraction of qualifying universes where the
-    /// prediction held.
-    ///
-    /// Sets `self.accuracy` and `self.score` as side effects.
-    /// Score = accuracy - λ × complexity, with λ = 0.1.
-    pub fn test<T>(
-        &mut self,
-        test_data: &[(&[R], &[Vec<T>])],
-        metric_fn: &MetricFn<T>,
-        threshold: f64,
-    ) -> f64 {
-        let mut positive_condition = 0usize;
-        let mut correct_predictions = 0usize;
-
-        for (rules, trajectories) in test_data {
-            if (self.condition_fn)(rules) {
-                positive_condition += 1;
-                let metric_value = metric_fn(trajectories);
-                if metric_value > threshold {
-                    correct_predictions += 1;
-                }
-            }
-        }
-
-        self.accuracy = if positive_condition > 0 {
-            correct_predictions as f64 / positive_condition as f64
-        } else {
-            0.0
-        };
-
-        let lambda = 0.1;
-        self.score = self.accuracy - lambda * self.complexity;
-
-        self.accuracy
-    }
-
     /// Whether this hypothesis survives the complexity penalty.
     ///
     /// A hypothesis survives if Score > 0 and Accuracy ≥ 0.5.
+    /// `accuracy` and `score` must be set by the scientific cycle
+    /// before calling this method.
     pub fn survives(&self) -> bool {
         self.score > 0.0 && self.accuracy >= 0.5
     }

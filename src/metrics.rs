@@ -265,7 +265,7 @@ pub fn compute_storage<T: Eq + Hash + Clone>(
         }
 
         if all_x.len() > 10 {
-            let score = shuffle_corrected_nmi(&all_x, &all_y, n_shuffles, seed);
+            let score = shuffle_corrected_nmi(&all_x, &all_y, n_shuffles, seed + delta as u64);
             best = best.max(score);
         }
     }
