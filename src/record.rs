@@ -25,7 +25,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! arco = { version = "0.3", features = ["serialize"] }
+//! arco = { version = "0.4", features = ["serialize"] }
 //! ```
 
 use crate::hypotheses::Hypothesis;

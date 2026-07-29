@@ -266,20 +266,3 @@ print_spectrum_table(graph_spectrum, "Binary Graph")
 
 # Print hypothesis
 print_hypothesis(graph_hyp, graph_surv, ca_hyp, ca_surv)
-
-exit()
-
-# Print summary table
-print("\nHypothesis Summary:")
-print(f"{'Hypothesis':<35} {'Survival':<10} {'Acc Range':<18} {'Mean':<8}")
-print("-" * 71)
-
-all_hyp = {}
-for name, accs in graph_hyp.items():
-    all_hyp[f"graph/{name}"] = (accs, graph_surv.get(name, 0))
-for name, accs in ca_hyp.items():
-    all_hyp[f"ca/{name}"] = (accs, ca_surv.get(name, 0))
-
-for name in sorted(all_hyp.keys()):
-    accs, surv = all_hyp[name]
-    print(f"{name:<35} {surv}/10{'':<4} {min(accs):.1f}--{max(accs):.1f}%{'':<8} {np.mean(accs):.1f}%")
