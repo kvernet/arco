@@ -1,4 +1,5 @@
 /target
+/sweep_data
 **/*.rs.bk
 *.swp
 .DS_Store

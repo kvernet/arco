@@ -54,6 +54,10 @@ struct SharedArgs {
     /// Fast test run (overrides train/test)
     #[arg(long)]
     quick: bool,
+
+    /// Save the research record as JSON to this file
+    #[arg(long)]
+    output: Option<String>,
 }
 
 // ===================================================================
@@ -180,11 +184,19 @@ fn main() {
             let record = run_graph(args);
             println!("\n{}", record.summary());
             print_spectrum_graph(&record);
+
+            if let Some(path) = &args.shared.output {
+                save_record(&record, path);
+            }
         }
         Substrate::Ca(args) => {
             let record = run_ca(args);
             println!("\n{}", record.summary());
             print_spectrum_ca(&record);
+
+            if let Some(path) = &args.shared.output {
+                save_record(&record, path);
+            }
         }
     }
 }
@@ -256,4 +268,24 @@ fn print_spectrum_ca(record: &ResearchRecord<arco::substrates::ca::CAUniverse<8,
             label, n, stor_pct, mean_stor
         );
     }
+}
+
+// ===================================================================
+// Record saving
+// ===================================================================
+
+#[cfg(feature = "serialize")]
+fn save_record<T: serde::Serialize>(record: &T, path: &str) {
+    let json = serde_json::to_string_pretty(record).expect("Failed to serialize research record");
+    std::fs::write(path, json).expect("Failed to write output file");
+}
+
+#[cfg(not(feature = "serialize"))]
+fn save_record<T>(_record: &T, path: &str) {
+    eprintln!(
+        "Error: --output '{}' requires the 'serialize' feature.",
+        path
+    );
+    eprintln!("Rebuild with: cargo build --release --features serialize");
+    std::process::exit(1);
 }

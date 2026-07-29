@@ -135,12 +135,17 @@ impl<const N: usize, const R: usize> InformationUniverse for CAUniverse<N, R> {
     }
 
     fn null_rules(&self, rng: &mut dyn Rng) -> Vec<Self::Rule> {
-        // Null rules: the most chaotic rules (lambda near 0.5, high sensitivity).
-        // For R=1, Rule 30 is the canonical chaotic rule.
+        // Pool of known chaotic rules for R=1
+        let chaotic: &[u64] = &[30, 45, 86, 106, 135, 149];
         if R == 1 {
-            vec![CARule::<N, R>::from_wolfram_number(30)]
+            let size = rng.random_range(1..=3);
+            let mut rules = Vec::with_capacity(size);
+            for _ in 0..size {
+                let idx = rng.random_range(0..chaotic.len());
+                rules.push(CARule::<N, R>::from_wolfram_number(chaotic[idx]));
+            }
+            rules
         } else {
-            // For larger radii, generate random rules as null
             let size = rng.random_range(1..=3);
             (0..size).map(|_| CARule::<N, R>::random(rng)).collect()
         }
@@ -179,13 +184,18 @@ mod tests {
     }
 
     #[test]
-    fn test_null_rules_for_r1_is_rule30() {
+    fn test_null_rules_samples_from_chaotic_pool() {
         let mut rng = StdRng::seed_from_u64(42);
         let universe = CAUniverse::<8, 1>::new("full_state", &mut rng, 300);
         let mut test_rng = StdRng::seed_from_u64(0);
 
         let rules = universe.null_rules(&mut test_rng);
-        assert_eq!(rules.len(), 1);
-        assert!(rules[0].name().contains("Rule 30"));
+        assert!(!rules.is_empty());
+        // All rules should be from the chaotic pool
+        let chaotic: &[u64] = &[30, 45, 86, 106, 135, 149];
+        for rule in &rules {
+            let wn = rule.wolfram_number().unwrap();
+            assert!(chaotic.contains(&wn), "Rule {} not in chaotic pool", wn);
+        }
     }
 }

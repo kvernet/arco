@@ -1,6 +1,6 @@
 [package]
 name = "arco"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Automated Research into Computational Ontologies — a platform for discovering the conditions under which computation emerges"
 repository = "https://github.com/kvernet/arco"
@@ -17,11 +17,12 @@ rand = "0.10"
 thiserror = "2"
 rayon = "1"
 serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 clap = { version = "4", features = ["derive"] }
 
 [features]
 default = []
-serialize = ["serde"]
+serialize = ["serde", "serde_json"]
 
 [profile.release]
 opt-level = 3

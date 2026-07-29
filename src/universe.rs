@@ -170,6 +170,10 @@ pub trait InformationUniverse {
     ///
     /// # Arguments
     /// * `rng` — Random number generator for stochastic rule selection.
+    ///
+    /// The `rng` parameter is provided for substrates that need stochastic
+    /// rule generation. Implementations that use deterministic cycling
+    /// (e.g., pre-generated rule sets) may ignore it.
     fn generate_rules(&self, rng: &mut dyn Rng) -> (Vec<Self::Rule>, f64);
 
     /// Generate a destructive rule set for null-distribution calibration.
