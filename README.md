@@ -71,7 +71,7 @@ python3 scripts/analyze.py sweep_data
 | Bracket | Storage Rate Range | Mean |
 |---------|-------------------|------|
 | Noise (0.00–0.15) | 11.0–41.6% | 21.1% |
-| Balanced (0.40–0.60) | 20.8–71.3% | 35.2%|
+| Balanced (0.40–0.60) | 20.8–71.3% | 35.2% |
 | Structured (0.85–1.00) | 90.5–99.6% | **93.9%** |
 
 A 4.5× difference. This is ARCO's most robust finding.
@@ -87,22 +87,22 @@ A 4.5× difference. This is ARCO's most robust finding.
 
 H5 (Transport Law) and H2 are the most reliable. H1, H4, H6, H8 did not survive (0/10). H6 is a negative control (all-destructive → storage) — its consistent failure validates calibration.
 
-### CA Substrate — n=256
+### CA Substrate — n=1,000
 
-Null distribution sampled from a pool of known chaotic rules. All hypotheses use measurable properties only.
+Null distribution sampled from a pool of known chaotic rules (30, 45, 86, 106, 135, 149). All hypotheses use measurable properties only. Rule sets are sampled independently for train and test from the full Wolfram pool.
 
 #### Hypothesis Survival
 
 | ID | Condition | Survival | Acc. Range | Mean |
 |----|-----------|----------|-----------|------|
-| H3 | Low sensitivity → storage | 10/10 | 74.8–91.2% | 84.9% |
-| H6 | Mid-lambda → storage | 10/10 | 74.2–88.7% | 83.5% |
-| H5 | Not Rule 0 → storage | 10/10 | 73.3–88.0% | 82.4% |
-| H2 | Parity conservation → storage | 10/10 | 64.7–100.0% | 78.4% |
-| H1 | Reversible → storage | 8/10 | 30.0–100.0% | 56.9% |
-| H4 | Even rule number → storage | 0/10 | — | — |
+| H3 | Low sensitivity → storage | 10/10 | 79.7–92.6% | 85.4% |
+| H4 | Even rule number → storage | 10/10 | 77.7–89.0% | 83.8% |
+| H6 | Mid-lambda → storage | 10/10 | 77.9–91.1% | 83.2% |
+| H5 | Not Rule 0 → storage | 10/10 | 76.8–90.3% | 82.5% |
+| H2 | Parity conservation → storage | 10/10 | 57.1–89.5% | 74.9% |
+| H1 | Reversible → storage | 7/10 | 33.3–81.8% | 55.6% |
 
-H4 failed because the chaotic null pool contains both even (30, 86, 106) and odd (45, 135, 149) rules with overlapping storage distributions. Evenness does not discriminate.
+H4 (even rule number) is a strong predictor. Even-numbered rules correspond to quiescent rules in Wolfram's classification — the all-zero neighborhood stays zero, providing a stable background for information preservation. ARCO recovered this connection without being told about quiescence.
 
 ### Limitations
 

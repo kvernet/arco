@@ -53,7 +53,6 @@ pub struct CAUniverse<const N: usize, const R: usize = 1> {
     rules: Vec<CARule<N, R>>,
     observer: CAObserver,
     schedule: SynchronousCASchedule,
-    rule_index: std::cell::Cell<usize>,
 }
 
 impl<const N: usize, const R: usize> CAUniverse<N, R> {
@@ -86,7 +85,6 @@ impl<const N: usize, const R: usize> CAUniverse<N, R> {
             rules,
             observer: CAObserver::from_name(obs_name),
             schedule: SynchronousCASchedule::new(),
-            rule_index: std::cell::Cell::new(0),
         }
     }
 
@@ -114,21 +112,37 @@ impl<const N: usize, const R: usize> InformationUniverse for CAUniverse<N, R> {
         &self.schedule
     }
 
-    fn generate_rules(&self, _rng: &mut dyn Rng) -> (Vec<Self::Rule>, f64) {
-        // Cycle through pre-generated rules.
-        // For R=1, structured_ratio is based on lambda (Langton parameter).
-        let index = self.rule_index.get();
-        let rule = self.rules[index % self.rules.len()].clone();
-        self.rule_index.set(index + 1);
+    fn generate_rules(&self, rng: &mut dyn Rng) -> (Vec<Self::Rule>, f64) {
+        // Sample uniformly from the Wolfram-numbered rules.
+        // This ensures both train and test sets see the full distribution
+        // of rule numbers, avoiding the sequential cycling bug where test
+        // data could structurally exclude hypothesis-positive cases.
+        let wolfram_rules: Vec<&CARule<N, R>> = self
+            .rules
+            .iter()
+            .filter(|r| r.wolfram_number().is_some())
+            .collect();
 
-        // Compute structured_ratio from measurable properties.
-        // Low lambda (ordered) or high lambda (chaotic) → less "structured."
-        // Mid-lambda (complex) → more "structured."
+        if wolfram_rules.is_empty() {
+            // Fallback: pick any rule
+            let idx = rng.random_range(0..self.rules.len());
+            let rule = self.rules[idx].clone();
+            let lambda = rule.lambda();
+            let structured_ratio = if !(0.2..=0.8).contains(&lambda) {
+                0.2
+            } else {
+                0.8
+            };
+            return (vec![rule], structured_ratio);
+        }
+
+        let idx = rng.random_range(0..wolfram_rules.len());
+        let rule = wolfram_rules[idx].clone();
         let lambda = rule.lambda();
-        let structured_ratio = if !(0.2..0.8).contains(&lambda) {
-            0.2 // ordered or chaotic
+        let structured_ratio = if !(0.2..=0.8).contains(&lambda) {
+            0.2
         } else {
-            0.8 // complex regime
+            0.8
         };
 
         (vec![rule], structured_ratio)
