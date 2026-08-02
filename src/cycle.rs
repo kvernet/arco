@@ -26,7 +26,6 @@
 //! println!("{}", record.summary());
 //! ```
 
-use std::hash::Hash;
 use std::time::Instant;
 
 use rand::RngExt;
@@ -40,8 +39,7 @@ use rayon::iter::ParallelIterator;
 use crate::calibration::CalibrationConfig;
 use crate::calibration::{calibrate, generate_trajectories};
 use crate::hypotheses::{Hypothesis, surviving_hypotheses};
-use crate::metrics::{compute_memory, compute_persistence, compute_storage};
-use crate::observation::Observation;
+use crate::metrics::{Estimator, MetricConfig, memory, persistence, storage};
 use crate::record::{HypothesisRecord, ResearchRecord, UniverseResult};
 use crate::rules::Rule;
 use crate::types::BooleanTester;
@@ -74,6 +72,8 @@ pub struct CycleConfig {
     pub n_null_universes: usize,
     /// Random seed for reproducibility.
     pub seed: u64,
+    /// The MI estimator
+    pub estimator: Estimator,
 }
 
 impl Default for CycleConfig {
@@ -87,6 +87,7 @@ impl Default for CycleConfig {
             n_shuffles: 10,
             n_null_universes: 30,
             seed: 42,
+            estimator: Estimator::Plugin,
         }
     }
 }
@@ -132,12 +133,7 @@ pub fn run_cycle<U: InformationUniverse>(
     config: &CycleConfig,
     hypotheses: &mut [Hypothesis<U::Rule>],
     boolean_tester: Option<&BooleanTester<U>>,
-) -> ResearchRecord<U>
-where
-    <U::Observation as Observation<U::State>>::Output: Eq + Hash + Clone + Send + Sync,
-    U::Rule: Send + Sync,
-    U::State: Send + Sync,
-{
+) -> ResearchRecord<U> {
     let t0 = Instant::now();
     let mut record = ResearchRecord::new(env!("CARGO_PKG_VERSION"));
 
@@ -189,14 +185,18 @@ where
     // ================================================================
     // STEP 2: CALIBRATE
     // ================================================================
+    let met_config = MetricConfig {
+        estimator: config.estimator,
+        max_delta: config.max_delta,
+        n_shuffles: config.n_shuffles,
+        seed: config.seed,
+    };
     let ca_config = CalibrationConfig {
+        metric: met_config,
         percentile: 95.0,
         floor_persistence: 0.01,
         floor_storage: 0.01,
         floor_memory: 0.01,
-        max_delta: config.max_delta,
-        n_shuffles: config.n_shuffles,
-        seed: config.seed,
     };
     let calibration = calibrate(
         universe,
@@ -265,14 +265,9 @@ where
                 structured_ratio: *ratio,
                 n_rules: rules.len(),
                 rule_names: rules.iter().map(|r| r.name().to_string()).collect(),
-                persistence: compute_persistence(&ensemble, 1, config.n_shuffles, config.seed),
-                storage: compute_storage(
-                    &ensemble,
-                    config.max_delta,
-                    config.n_shuffles,
-                    config.seed,
-                ),
-                memory: compute_memory(&ensemble, config.max_delta, config.n_shuffles, config.seed),
+                persistence: persistence(&ensemble, 1, &ca_config.metric),
+                storage: storage(&ensemble, &ca_config.metric),
+                memory: memory(&ensemble, &ca_config.metric),
             };
         });
 
@@ -328,15 +323,9 @@ where
             if (h.condition_fn)(rules) {
                 positive += 1;
                 let metric_value = match h.property_name.as_str() {
-                    "persistence" => {
-                        compute_persistence(ensemble, 1, config.n_shuffles, config.seed)
-                    }
-                    "storage" => {
-                        compute_storage(ensemble, config.max_delta, config.n_shuffles, config.seed)
-                    }
-                    "memory" => {
-                        compute_memory(ensemble, config.max_delta, config.n_shuffles, config.seed)
-                    }
+                    "persistence" => persistence(ensemble, 1, &ca_config.metric),
+                    "storage" => storage(ensemble, &ca_config.metric),
+                    "memory" => memory(ensemble, &ca_config.metric),
                     _ => 0.0,
                 };
                 if metric_value > threshold {

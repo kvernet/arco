@@ -3,6 +3,13 @@
 //! Command-line interface for running the scientific cycle on
 //! any registered substrate.
 
+use std::collections::HashMap;
+
+use arco::metrics::Estimator;
+use arco::substrates::ca::{CAUniverse, generate_ca_hypotheses};
+use arco::substrates::graph::{
+    BinaryGraphUniverse, generate_standard_hypotheses, verify_boolean_functions,
+};
 use clap::{Args, Parser, Subcommand};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -50,6 +57,10 @@ struct SharedArgs {
     /// Random seed for reproducibility
     #[arg(long, default_value = "42")]
     seed: u64,
+
+    /// MI estimator
+    #[arg(long, default_value = "plugin")]
+    estimator: String,
 
     /// Fast test run (overrides train/test)
     #[arg(long)]
@@ -114,10 +125,16 @@ fn cycle_config(shared: &SharedArgs) -> CycleConfig {
             ..CycleConfig::default()
         }
     } else {
+        let estimator = match shared.estimator.as_str() {
+            "mm" => Estimator::MillerMadow,
+            "nsb" => Estimator::Nsb,
+            _ => Estimator::Plugin,
+        };
         CycleConfig {
             n_train: shared.train,
             n_test: shared.test,
             seed: shared.seed,
+            estimator,
             ..CycleConfig::default()
         }
     }
@@ -127,12 +144,7 @@ fn cycle_config(shared: &SharedArgs) -> CycleConfig {
 // Substrate runners
 // ===================================================================
 
-fn run_graph(args: &GraphArgs) -> ResearchRecord<arco::substrates::graph::BinaryGraphUniverse> {
-    use arco::substrates::graph::{
-        BinaryGraphUniverse, generate_standard_hypotheses, verify_boolean_functions,
-    };
-    use std::collections::HashMap;
-
+fn run_graph(args: &GraphArgs) -> ResearchRecord<BinaryGraphUniverse> {
     let config = cycle_config(&args.shared);
     let mut rng = StdRng::seed_from_u64(args.shared.seed);
     let universe = BinaryGraphUniverse::new(
@@ -153,15 +165,13 @@ fn run_graph(args: &GraphArgs) -> ResearchRecord<arco::substrates::graph::Binary
     run_cycle(&universe, &config, &mut hypotheses, Some(&boolean_tester))
 }
 
-fn run_ca(args: &CaArgs) -> ResearchRecord<arco::substrates::ca::CAUniverse<8, 1>> {
+fn run_ca(args: &CaArgs) -> ResearchRecord<CAUniverse<8, 1>> {
     // Note: N and R are fixed at compile time. For now, we support
     // the most common case (8 cells, radius 1). Adding runtime
     // configurability for const generics requires a macro or
     // dynamic dispatch — deferred to future work.
     assert_eq!(args.cells, 8, "Only N=8 is currently supported via CLI");
     assert_eq!(args.radius, 1, "Only R=1 is currently supported via CLI");
-
-    use arco::substrates::ca::{CAUniverse, generate_ca_hypotheses};
 
     let config = cycle_config(&args.shared);
     let mut rng = StdRng::seed_from_u64(args.shared.seed);
@@ -205,7 +215,7 @@ fn main() {
 // Spectrum printing
 // ===================================================================
 
-fn print_spectrum_graph(record: &ResearchRecord<arco::substrates::graph::BinaryGraphUniverse>) {
+fn print_spectrum_graph(record: &ResearchRecord<BinaryGraphUniverse>) {
     let threshold = record.thresholds.get("storage").copied().unwrap_or(0.0);
     let brackets: &[(&str, f64, f64)] = &[
         ("Noise", 0.00, 0.15),
@@ -239,7 +249,7 @@ fn print_spectrum_graph(record: &ResearchRecord<arco::substrates::graph::BinaryG
     }
 }
 
-fn print_spectrum_ca(record: &ResearchRecord<arco::substrates::ca::CAUniverse<8, 1>>) {
+fn print_spectrum_ca(record: &ResearchRecord<CAUniverse<8, 1>>) {
     let threshold = record.thresholds.get("storage").copied().unwrap_or(0.0);
     let brackets: &[(&str, f64, f64)] = &[
         ("Low structure (0.0--0.3)", 0.0, 0.3),

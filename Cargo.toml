@@ -1,6 +1,6 @@
 [package]
 name = "arco"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "Automated Research into Computational Ontologies — a platform for discovering the conditions under which computation emerges"
 repository = "https://github.com/kvernet/arco"

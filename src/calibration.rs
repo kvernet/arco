@@ -24,8 +24,14 @@
 
 use std::hash::Hash;
 
-use crate::metrics::{compute_memory, compute_persistence, compute_storage};
+use crate::metrics::MetricConfig;
+use crate::metrics::memory;
+use crate::metrics::persistence;
+use crate::metrics::storage;
 use crate::observation::Observation;
+use crate::rules::Rule;
+use crate::schedule::Schedule;
+use crate::state::State;
 use crate::types::NullEnsembles;
 use crate::universe::InformationUniverse;
 use rand::RngExt;
@@ -34,25 +40,21 @@ use rand::rngs::StdRng;
 
 /// Configuration for threshold calibration.
 pub struct CalibrationConfig {
+    pub metric: MetricConfig,
     pub percentile: f64,
     pub floor_persistence: f64,
     pub floor_storage: f64,
     pub floor_memory: f64,
-    pub max_delta: usize,
-    pub n_shuffles: usize,
-    pub seed: u64,
 }
 
 impl Default for CalibrationConfig {
     fn default() -> Self {
         Self {
+            metric: MetricConfig::default(),
             percentile: 95.0,
             floor_persistence: 0.01,
             floor_storage: 0.01,
             floor_memory: 0.01,
-            max_delta: 15,
-            n_shuffles: 10,
-            seed: 42,
         }
     }
 }
@@ -85,10 +87,7 @@ pub fn generate_null_trajectories<U: InformationUniverse>(
     n_ensemble: usize,
     steps: usize,
     seed: u64,
-) -> NullEnsembles<U>
-where
-    <U::Observation as Observation<U::State>>::Output: Clone,
-{
+) -> NullEnsembles<U> {
     let mut rng = StdRng::seed_from_u64(seed);
     let state_space = universe.state_space();
     let schedule = universe.schedule();
@@ -148,10 +147,10 @@ pub fn generate_trajectories<S, R, O, K>(
     base_seed: u64,
 ) -> Vec<Vec<O::Output>>
 where
-    S: crate::state::State,
-    R: crate::rules::Rule<S>,
-    K: crate::schedule::Schedule<S, R>,
-    O: crate::observation::Observation<S>,
+    S: State,
+    R: Rule<S>,
+    K: Schedule<S, R>,
+    O: Observation<S>,
     O::Output: Clone,
 {
     let mut trajectories = Vec::with_capacity(initial_states.len());
@@ -234,24 +233,9 @@ pub fn calibrate_thresholds<T: Eq + Hash + Clone>(
     let mut memory_scores = Vec::with_capacity(null_ensembles.len());
 
     for ensemble in null_ensembles {
-        persistence_scores.push(compute_persistence(
-            ensemble,
-            1,
-            config.n_shuffles,
-            config.seed,
-        ));
-        storage_scores.push(compute_storage(
-            ensemble,
-            config.max_delta,
-            config.n_shuffles,
-            config.seed,
-        ));
-        memory_scores.push(compute_memory(
-            ensemble,
-            config.max_delta,
-            config.n_shuffles,
-            config.seed,
-        ));
+        persistence_scores.push(persistence(ensemble, 1, &config.metric));
+        storage_scores.push(storage(ensemble, &config.metric));
+        memory_scores.push(memory(ensemble, &config.metric));
     }
 
     let persistence_threshold =
@@ -327,12 +311,14 @@ pub fn calibrate<U: InformationUniverse>(
     n_ensemble: usize,
     steps: usize,
     config: &CalibrationConfig,
-) -> CalibrationResult
-where
-    <U::Observation as Observation<U::State>>::Output: Eq + std::hash::Hash + Clone,
-{
-    let null_ensembles =
-        generate_null_trajectories(universe, n_null_universes, n_ensemble, steps, config.seed);
+) -> CalibrationResult {
+    let null_ensembles = generate_null_trajectories(
+        universe,
+        n_null_universes,
+        n_ensemble,
+        steps,
+        config.metric.seed,
+    );
 
     calibrate_thresholds(&null_ensembles, config)
 }
