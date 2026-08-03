@@ -12,8 +12,11 @@
 //! cargo run --example ca_cycle --release -- 42
 //! ```
 
+use arco::calibration::generate_trajectories;
 use arco::cycle::{CycleConfig, run_cycle};
-use arco::substrates::ca::{CAUniverse, generate_ca_hypotheses};
+use arco::metrics::{MetricConfig, storage};
+use arco::substrates::ca::{CARule, CAState, CAUniverse, generate_ca_hypotheses};
+use arco::universe::InformationUniverse;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
@@ -76,5 +79,64 @@ fn main() {
         );
     }
 
+    // Classification
+    classify(&universe);
+
     println!("\n{}", record.summary());
+}
+
+fn classify(universe: &CAUniverse<8, 1>) {
+    let seeds = [42, 99, 137, 256, 512];
+
+    println!("\nWolfram Class Recovery ({} seeds):", seeds.len());
+    println!(
+        "  {:<10} {:<18} {:<15} {}",
+        "Rule", "Storage", "Wolfram Class", "Description"
+    );
+    println!(
+        "  {:<10} {:<18} {:<15} {}",
+        "----", "-------", "-------------", "-----------"
+    );
+
+    let famous: &[(u64, &str, &str)] = &[
+        (0, "Class 1", "Fixed point (all 0)"),
+        (30, "Class 3", "Chaotic"),
+        (54, "Class 4", "Complex, Turing-complete"),
+        (90, "Class 2", "Sierpinski triangle"),
+        (110, "Class 4", "Turing-complete"),
+        (184, "Class 2", "Traffic flow model"),
+        (255, "Class 1", "Fixed point (all 1)"),
+    ];
+
+    let observer = universe.observation();
+    let schedule = universe.schedule();
+
+    for &(rule_num, class, desc) in famous {
+        let mut storages = Vec::new();
+
+        for &seed in &seeds {
+            let mut diag_rng = StdRng::seed_from_u64(seed);
+            let rule = CARule::<8, 1>::from_wolfram_number(rule_num);
+            let rules = vec![rule];
+
+            let initial_states: Vec<_> = (0..10)
+                .map(|_| CAState::<8, 1>::random(&mut diag_rng))
+                .collect();
+
+            let trajectories =
+                generate_trajectories(&initial_states, &rules, observer, schedule, 60, seed);
+
+            let met_config = MetricConfig::default();
+            storages.push(storage(&trajectories, &met_config));
+        }
+
+        let min_s = storages.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_s = storages.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let mean_s = storages.iter().sum::<f64>() / storages.len() as f64;
+
+        println!(
+            "  Rule {:<3}   {:.2}–{:.2} ({:.2})    {:<15} {}",
+            rule_num, min_s, max_s, mean_s, class, desc
+        );
+    }
 }

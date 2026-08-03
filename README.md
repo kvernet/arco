@@ -76,20 +76,18 @@ Three mutual information estimators were compared across 10 seeds on both substr
 |-----------|-----------|-------------|-------------------|----------|----------|
 | Graph     | plugin    | 37.1–70.7% (48.2) | 90.5–99.6% (93.9) | 50.5–85.2% (65.4) | 10/10 |
 | Graph     | mm        | 37.4–70.6% (48.2) | 90.5–99.6% (94.0) | 52.6–85.2% (65.8) | 10/10 |
-| Graph     | qe        | 36.2–70.7% (47.6) | 88.3–99.3% (93.2) | 48.5–86.4% (65.4) | 9/10 |
+| Graph     | qe        | 37.8–71.3% (48.2) | 90.5–99.6% (93.7) | 53.6–85.2% (65.6) | 10/10 |
 
 | Substrate | Estimator | Storage Rate | Structured Storage | H3_LOW_SENSITIVITY Acc | Survival |
 |-----------|-----------|-------------|-------------------|----------|----------|
 | Ca        | plugin    | 73.7–90.4% (82.7) | 75.5–90.7% (83.7) | 79.7–92.6% (85.4) | 10/10 |
 | Ca        | mm        | 78.1–90.0% (84.4) | 80.5–90.9% (86.1) | 82.7–91.8% (87.0) | 10/10 |
-| Ca        | qe        | 79.9–88.4% (83.3) | 80.2–90.8% (84.8) | 81.5–88.2% (85.6) | 10/10 |
+| Ca        | qe        | 77.6–89.3% (83.8) | 78.6–90.9% (85.0) | 82.3–91.8% (86.5) | 10/10 |
 
 Three independent mutual information estimators (plugin with shuffle
 correction, Miller-Madow, and quadratic extrapolation) agree within
-3 points across both substrates and all 10 seeds. All results below
+2 points across both substrates and all 10 seeds. All results below
 use the plugin estimator with shuffle correction (the default).
-
-### Graph Substrate — n=1,000
 
 #### Structure-Storage Gradient
 
