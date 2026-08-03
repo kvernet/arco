@@ -3,7 +3,7 @@
 # Usage: ./scripts/sweep.sh
 
 SEEDS=(42 99 137 256 512 1024 2048 4096 8192 16384)
-ESTIMATORS=("plugin" "mm" "nsb")
+ESTIMATORS=("plugin" "mm" "qe")
 DATA_DIR="sweep_data"
 mkdir -p "$DATA_DIR"
 

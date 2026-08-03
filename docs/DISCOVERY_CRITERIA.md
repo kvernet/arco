@@ -40,7 +40,7 @@ are evaluated against these criteria regardless of outcome.
 - [ ] Results reported across ≥ 10 independent seeds with ranges
   (min–max), not single-seed point estimates.
 - [ ] At least one bias-corrected estimator variant tested (Miller-Madow
-  or NSB) alongside the plugin estimator with shuffle correction.
+  or Quadratic Extrapolation) alongside the plugin estimator with shuffle correction.
 - [ ] Sample size (n_train, n_test) is documented and justified.
 - [ ] Hypothesis accuracy confidence intervals reported (binomial
   proportion, 95% CI).

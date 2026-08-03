@@ -80,7 +80,7 @@ def spectrum_summary(records, brackets):
 
 def estimator_comparison(records_map, substrate, key_hypothesis):
     """Generate estimator comparison table."""
-    estimators = ["plugin", "mm", "nsb"]
+    estimators = ["plugin", "mm", "qe"]
     lines = []
     lines.append(f"| Substrate | Estimator | Storage Rate | Structured Storage | {key_hypothesis} Acc | Survival |")
     lines.append(f"|-----------|-----------|-------------|-------------------|----------|----------|")
@@ -134,7 +134,7 @@ N_SEEDS = 10
 # Load all records
 records_map = {}
 for substrate in ["graph", "ca"]:
-    for est in ["plugin", "mm", "nsb"]:
+    for est in ["plugin", "mm", "qe"]:
         records = load_records(substrate, est)
         if records:
             records_map[(substrate, est)] = records

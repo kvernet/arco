@@ -1,7 +1,7 @@
 use std::hash::Hash;
 
 use crate::metrics::{
-    Estimator, MetricConfig, mm::shuffle_corrected_mm, nsb::shuffle_corrected_nsb,
+    Estimator, MetricConfig, mm::shuffle_corrected_mm, qe::shuffle_corrected_qe,
     shuffle::shuffle_corrected,
 };
 
@@ -9,7 +9,7 @@ pub fn corrected_nmi<T: Eq + Hash + Clone>(x: &[T], y: &[T], config: &MetricConf
     match config.estimator {
         Estimator::Plugin => shuffle_corrected(x, y, config.n_shuffles, config.seed),
         Estimator::MillerMadow => shuffle_corrected_mm(x, y, config.n_shuffles, config.seed),
-        Estimator::Nsb => shuffle_corrected_nsb(x, y, config.n_shuffles, config.seed),
+        Estimator::QE => shuffle_corrected_qe(x, y, config.n_shuffles, config.seed),
     }
 }
 

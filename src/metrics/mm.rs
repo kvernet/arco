@@ -1,7 +1,7 @@
 //! Miller-Madow bias correction for mutual information.
 //!
 //! The Miller-Madow correction subtracts a first-order bias term
-//! from the plugin MI estimate: MI_mm = MI_plugin - (m_x - 1)(m_y - 1) / (2N ln 2)
+//! from the plugin MI estimate: MI_mm = MI_plugin - (K_xy - m_x - m_y + 1) / (2N ln 2)
 //! where m_x and m_y are the number of distinct values observed.
 //!
 //! # Limitations
@@ -9,18 +9,18 @@
 //! Miller-Madow is a first-order correction. It works well for
 //! moderate alphabet sizes but underestimates bias in severely
 //! undersampled regimes. For large-alphabet, small-sample cases,
-//! use the NSB estimator instead.
+//! use the QE estimator instead.
 
+use std::f64::consts;
 use std::hash::Hash;
-use std::{collections::HashSet, f64::consts};
 
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
-use crate::metrics::entropy::{dmi, entropy};
+use crate::metrics::entropy::{dmi_with_counts, entropy};
 
 /// Miller-Madow corrected mutual information I(X;Y).
 ///
-/// Subtracts (m_x - 1)(m_y - 1) / (2N ln 2) from the plugin estimate,
+/// Subtracts (K_xy - m_x - m_y + 1) / (2N ln 2) from the plugin estimate,
 /// where m_x and m_y count distinct values and N is the sample size.
 pub fn dmi_mm<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
     let n = x_seq.len();
@@ -29,14 +29,13 @@ pub fn dmi_mm<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
     }
 
     let total = n as f64;
-    let plugin = dmi(x_seq, y_seq);
+    let (plugin, k_xy, m_x, m_y) = dmi_with_counts(x_seq, y_seq);
 
-    // Count distinct values
-    let m_x = x_seq.iter().collect::<HashSet<_>>().len() as f64;
-    let m_y = y_seq.iter().collect::<HashSet<_>>().len() as f64;
-
-    // Miller-Madow correction: (m_x - 1)(m_y - 1) / (2N ln 2)
-    let correction = (m_x - 1.0) * (m_y - 1.0) / (2.0 * total * consts::LN_2);
+    // Standard Miller-Madow: (K_xy - m_x - m_y + 1) / (2N ln 2)
+    let k_xy = k_xy as f64;
+    let m_x = m_x as f64;
+    let m_y = m_y as f64;
+    let correction = (k_xy - m_x - m_y + 1.0) / (2.0 * total * consts::LN_2);
 
     (plugin - correction).max(0.0)
 }
@@ -100,6 +99,7 @@ pub fn shuffle_corrected_mm<T: Eq + Hash + Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::dmi;
 
     #[test]
     fn test_mm_reduces_plugin_bias() {

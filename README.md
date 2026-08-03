@@ -25,7 +25,7 @@ cargo run --release --features serialize -- graph --train 1000 --seed 42
 cargo run --release --features serialize -- ca
 
 # Compare estimators
-cargo run --release -- graph --estimator nsb
+cargo run --release -- graph --estimator qe
 cargo run --release -- graph --estimator mm
 
 # Fast test run
@@ -75,16 +75,19 @@ Three mutual information estimators were compared across 10 seeds on both substr
 | Substrate | Estimator | Storage Rate | Structured Storage | H5_TRANSPORT Acc | Survival |
 |-----------|-----------|-------------|-------------------|----------|----------|
 | Graph     | plugin    | 37.1–70.7% (48.2) | 90.5–99.6% (93.9) | 50.5–85.2% (65.4) | 10/10 |
-| Graph     | mm        | 21.5–26.7% (24.7) | 64.1–76.5% (70.2) | 22.7–35.9% (29.6) | 0/10 |
-| Graph     | nsb       | 36.1–66.6% (46.4) | 87.6–98.5% (93.0) | 50.5–85.2% (64.5) | 10/10 |
+| Graph     | mm        | 37.4–70.6% (48.2) | 90.5–99.6% (94.0) | 52.6–85.2% (65.8) | 10/10 |
+| Graph     | qe        | 36.2–70.7% (47.6) | 88.3–99.3% (93.2) | 48.5–86.4% (65.4) | 9/10 |
 
 | Substrate | Estimator | Storage Rate | Structured Storage | H3_LOW_SENSITIVITY Acc | Survival |
 |-----------|-----------|-------------|-------------------|----------|----------|
 | Ca        | plugin    | 73.7–90.4% (82.7) | 75.5–90.7% (83.7) | 79.7–92.6% (85.4) | 10/10 |
-| Ca        | mm        | 72.1–87.1% (81.8) | 74.9–88.2% (83.3) | 77.8–89.3% (84.1) | 10/10 |
-| Ca        | nsb       | 80.4–89.3% (85.4) | 80.4–89.6% (85.6) | 84.4–91.8% (87.9) | 10/10 |
+| Ca        | mm        | 78.1–90.0% (84.4) | 80.5–90.9% (86.1) | 82.7–91.8% (87.0) | 10/10 |
+| Ca        | qe        | 79.9–88.4% (83.3) | 80.2–90.8% (84.8) | 81.5–88.2% (85.6) | 10/10 |
 
-**The plugin estimator with shuffle correction agrees with NSB (the gold standard for small-sample MI) within 2 points across both substrates.** Miller-Madow overcorrects for large observation alphabets (graph, 4096 symbols) but works for smaller alphabets (CA, 256 symbols). All results below use the plugin estimator with shuffle correction.
+Three independent mutual information estimators (plugin with shuffle
+correction, Miller-Madow, and quadratic extrapolation) agree within
+3 points across both substrates and all 10 seeds. All results below
+use the plugin estimator with shuffle correction (the default).
 
 ### Graph Substrate — n=1,000
 
@@ -136,22 +139,26 @@ ARCO supports three mutual information estimators, selectable via `--estimator`:
 
 | Estimator | Flag | Best for |
 |-----------|------|----------|
-| Plugin + shuffle | `plugin` (default) | General use, validated against NSB |
-| NSB | `nsb` | Large alphabets, publication-quality |
+| Plugin + shuffle | `plugin` (default) | General use |
+| QE | `qe` | Large alphabets, publication-quality |
 | Miller-Madow | `mm` | Small alphabets, fast bias correction |
 
-The plugin estimator with shuffle correction is the default and has been validated against NSB on both substrates (see Estimator Validation above).
+The plugin estimator with shuffle correction is the default and has been validated against QE and MM on both substrates (see Estimator Validation above).
 
 ### Limitations
 
-- Miller-Madow overcorrects for large observation alphabets. Use NSB or plugin for substrates with >1,000 distinct observations.
-- The Binary Graph Universe is a **validation substrate** — rules are hand-coded to calibrate the instrument. Discovery substrates are the next milestone.
-- All findings are from small state spaces (3-vertex graphs, 8-cell automata).
+- Quadratic extrapolation (QE) is an approximation to the full NSB
+  estimator.
+- The Binary Graph Universe is a **validation substrate** — rules are
+  hand-coded to calibrate the instrument. Discovery substrates are
+  the next milestone.
+- All findings are from small state spaces (3-vertex graphs, 8-cell
+  automata).
 
 ## Documentation
 
 - [Web Page](https://kvernet.com/arco)
-- [Mathematical Constitution](https://github.com/kvernet/arco/blob/main/docs/constitution.md) — the formal specification
+- [Mathematical Constitution](https://github.com/kvernet/arco/blob/main/docs/constitution.md)
 - [API documentation](https://docs.rs/arco)
 - [Examples](https://github.com/kvernet/arco/tree/main/examples)
 
@@ -162,7 +169,7 @@ The plugin estimator with shuffle correction is the default and has been validat
 python3 scripts/analyze.py sweep_data # Analyze and generate plots
 ```
 
-Every number in this README is traceable to a specific seed in `sweep_data/` produced by `scripts/sweep.sh`.
+Every number in this README is traceable to a specific seed produced by `scripts/sweep.sh`.
 
 ## Python Reference
 

@@ -9,7 +9,7 @@
 //! The `dmi` function uses the plugin (empirical) estimator. It is
 //! biased upward when the observation alphabet is large relative to
 //! sample size. For bias-corrected estimates, use the [`mm`] or
-//! [`nsb`] modules.
+//! [`qe`] modules.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -36,20 +36,22 @@ pub(crate) fn entropy<T: Eq + Hash>(values: &[T]) -> f64 {
     h
 }
 
-/// Plugin estimator of discrete mutual information I(X;Y).
+/// Plugin estimator returning MI and distinct value counts.
 ///
-/// Uses the empirical joint distribution from observed sequences.
-/// Observation values must be hashable.
-///
-/// # Bias
-///
-/// Biased upward when the observation alphabet size is comparable
-/// to sample size. For large-alphabet regimes, use [`mm::dmi_mm`]
-/// or [`nsb::dmi_nsb`] instead.
-pub fn dmi<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
+/// Returns (mi, k_xy, m_x, m_y) where:
+/// - k_xy: number of distinct joint (x,y) pairs observed
+/// - m_x: number of distinct x values observed
+/// - m_y: number of distinct y values observed
+pub(crate) fn dmi_with_counts<T: Eq + Hash + Clone>(
+    x_seq: &[T],
+    y_seq: &[T],
+) -> (f64, usize, usize, usize) {
+    // ... same logic as dmi, but return counts alongside mi
+    //(mi, joint_counts.len(), x_counter, y_counter)
+
     let n = x_seq.len();
     if n < 2 || n != y_seq.len() {
-        return 0.0;
+        return (0.0, 0, n, y_seq.len());
     }
 
     let total = n as f64;
@@ -91,7 +93,23 @@ pub fn dmi<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
         }
     }
 
-    mi.max(0.0)
+    //mi.max(0.0)
+
+    (mi, joint_counts.len(), x_counter, y_counter)
+}
+
+/// Plugin estimator of discrete mutual information I(X;Y).
+///
+/// Uses the empirical joint distribution from observed sequences.
+/// Observation values must be hashable.
+///
+/// # Bias
+///
+/// Biased upward when the observation alphabet size is comparable
+/// to sample size. For large-alphabet regimes, use [`mm::dmi_mm`]
+/// or [`qe::dmi_qe`] instead.
+pub fn dmi<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
+    dmi_with_counts(x_seq, y_seq).0.max(0.0)
 }
 
 /// Normalized mutual information: I(X;Y) / sqrt(H(X) · H(Y)).

@@ -6,13 +6,13 @@
 //!   Fast but biased with large alphabets.
 //! - **Miller-Madow**: first-order bias correction. Better for
 //!   moderate alphabet sizes.
-//! - **NSB**: Bayesian estimator for small-sample, large-alphabet
-//!   regimes. Gold standard, slower.
+//! - **QE**: Quadratic Extrapolation estimator for small-sample, large-alphabet
+//!   regimes.
 
 pub mod entropy;
 pub mod mm;
-pub mod nsb;
 pub mod persistence;
+pub mod qe;
 pub mod separation;
 pub mod shuffle;
 pub mod storage;
@@ -26,9 +26,12 @@ pub use storage::{memory, storage};
 // In mod.rs
 #[derive(Debug, Clone, Copy)]
 pub enum Estimator {
+    /// Default Plugin estimator
     Plugin,
+    /// Miller-Madow estimator
     MillerMadow,
-    Nsb,
+    /// Quadratic Extrapolation estimator
+    QE,
 }
 
 #[derive(Debug, Clone)]

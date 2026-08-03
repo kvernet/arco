@@ -58,7 +58,7 @@ struct SharedArgs {
     #[arg(long, default_value = "42")]
     seed: u64,
 
-    /// MI estimator
+    /// MI estimator: plugin, mm, qe
     #[arg(long, default_value = "plugin")]
     estimator: String,
 
@@ -127,7 +127,7 @@ fn cycle_config(shared: &SharedArgs) -> CycleConfig {
     } else {
         let estimator = match shared.estimator.as_str() {
             "mm" => Estimator::MillerMadow,
-            "nsb" => Estimator::Nsb,
+            "qe" => Estimator::QE,
             _ => Estimator::Plugin,
         };
         CycleConfig {

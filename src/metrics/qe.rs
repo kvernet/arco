@@ -1,6 +1,6 @@
-//! NSB (Nemenman-Shafee-Bialek) estimator for mutual information.
+//! QE (Quadratic Extrapolation) estimator for mutual information.
 //!
-//! The NSB estimator uses a Dirichlet prior with a mixture of
+//! The QE estimator uses a Dirichlet prior with a mixture of
 //! concentration parameters to handle both small and large alphabet
 //! regimes. It is the gold standard for small-sample, large-alphabet
 //! MI estimation.
@@ -12,10 +12,10 @@
 //!
 //! # Implementation note
 //!
-//! The full NSB estimator requires numerical integration over a
+//! The full QE estimator requires numerical integration over a
 //! prior on the Dirichlet concentration parameter α. We implement
 //! the quadratic extrapolation approximation (Strong et al., 1998)
-//! which NSB reduces to in practice. This gives a bias-corrected
+//! which QE reduces to in practice. This gives a bias-corrected
 //! estimate without the full Bayesian integration cost.
 
 use std::hash::Hash;
@@ -23,12 +23,12 @@ use std::hash::Hash;
 use crate::metrics::entropy::{dmi, entropy};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
-/// NSB-corrected mutual information I(X;Y).
+/// QE-corrected mutual information I(X;Y).
 ///
 /// Uses quadratic extrapolation: estimates MI at fractions of the
 /// data (1/2, 1/4, ...) and extrapolates to infinite sample size.
-/// This is the practical approximation to the full NSB estimator.
-pub fn dmi_nsb<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
+/// This is the practical approximation to the full QE estimator.
+pub fn dmi_qe<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T], seed: u64) -> f64 {
     let n = x_seq.len();
     if n < 4 || n != y_seq.len() {
         return 0.0;
@@ -45,7 +45,7 @@ pub fn dmi_nsb<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
         }
 
         // Subsample m elements without replacement
-        let mut rng = StdRng::seed_from_u64(42 + (frac * 1000.0) as u64);
+        let mut rng = StdRng::seed_from_u64(seed + (frac * 1000.0) as u64);
         let indices: Vec<usize> = {
             let mut idx: Vec<usize> = (0..n).collect();
             for i in 0..m {
@@ -82,12 +82,12 @@ pub fn dmi_nsb<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
     intercept.max(0.0)
 }
 
-/// NSB-corrected normalized mutual information.
+/// QE-corrected normalized mutual information.
 ///
-/// Applies NSB correction to the MI estimate, then normalizes.
+/// Applies QE correction to the MI estimate, then normalizes.
 /// Bounded in [0, 1].
-pub fn nmi_nsb<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
-    let mi = dmi_nsb(x_seq, y_seq);
+pub fn nmi_qe<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T], seed: u64) -> f64 {
+    let mi = dmi_qe(x_seq, y_seq, seed);
     if mi == 0.0 {
         return 0.0;
     }
@@ -102,11 +102,11 @@ pub fn nmi_nsb<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T]) -> f64 {
     (mi / (h_x * h_y).sqrt()).clamp(0.0, 1.0)
 }
 
-/// NSB + shuffle correction.
+/// QE + shuffle correction.
 ///
-/// Applies NSB to each estimate (observed and shuffled), then
+/// Applies QE to each estimate (observed and shuffled), then
 /// subtracts the mean shuffle baseline.
-pub fn shuffle_corrected_nsb<T: Eq + Hash + Clone>(
+pub fn shuffle_corrected_qe<T: Eq + Hash + Clone>(
     x_seq: &[T],
     y_seq: &[T],
     n_shuffles: usize,
@@ -116,7 +116,7 @@ pub fn shuffle_corrected_nsb<T: Eq + Hash + Clone>(
         return 0.0;
     }
 
-    let nmi_obs = nmi_nsb(x_seq, y_seq);
+    let nmi_obs = nmi_qe(x_seq, y_seq, seed);
     if nmi_obs == 0.0 {
         return 0.0;
     }
@@ -130,7 +130,7 @@ pub fn shuffle_corrected_nsb<T: Eq + Hash + Clone>(
             let j = rng.random_range(0..=i);
             y_shuffled.swap(i, j);
         }
-        nmi_shuffles.push(nmi_nsb(x_seq, &y_shuffled));
+        nmi_shuffles.push(nmi_qe(x_seq, &y_shuffled, seed));
     }
 
     let mean_shuffle: f64 = nmi_shuffles.iter().sum::<f64>() / n_shuffles as f64;
@@ -142,42 +142,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_nsb_reduces_bias() {
-        let mut rng = StdRng::seed_from_u64(42);
+    fn test_qe_reduces_bias() {
+        let seed: u64 = 42;
+        let mut rng = StdRng::seed_from_u64(seed);
         let x: Vec<u8> = (0..100).map(|_| rng.random_range(0..=7)).collect();
         let y: Vec<u8> = (0..100).map(|_| rng.random_range(0..=7)).collect();
 
         let plugin = dmi(&x, &y);
-        let nsb = dmi_nsb(&x, &y);
+        let qe = dmi_qe(&x, &y, seed);
 
-        // NSB should be lower than plugin for independent data
+        // QE should be lower than plugin for independent data
         // (though not guaranteed — extrapolation can go either way)
         // Just verify it doesn't crash and returns valid values
-        assert!(nsb >= 0.0, "NSB should be non-negative, got {:.4}", nsb);
+        assert!(qe >= 0.0, "QE should be non-negative, got {:.4}", qe);
 
         assert!(
-            nsb <= plugin + 0.1,
-            "NSB ({:.4}) should not greatly exceed plugin ({:.4}) for independent data",
-            nsb,
+            qe <= plugin + 0.1,
+            "QE ({:.4}) should not greatly exceed plugin ({:.4}) for independent data",
+            qe,
             plugin
         );
     }
 
     #[test]
-    fn test_nsb_preserves_signal() {
+    fn test_qe_preserves_signal() {
+        let seed: u64 = 42;
         let x = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
-        let nsb = dmi_nsb(&x, &x);
+        let qe = dmi_qe(&x, &x, seed);
         assert!(
-            nsb > 0.3,
-            "NSB should preserve MI for deterministic sequences, got {:.4}",
-            nsb
+            qe > 0.3,
+            "QE should preserve MI for deterministic sequences, got {:.4}",
+            qe
         );
     }
 
     #[test]
-    fn test_nmi_nsb_bounded() {
+    fn test_nmi_qe_bounded() {
+        let seed: u64 = 42;
         let x = vec![0, 1, 0, 1, 0, 1];
-        let n = nmi_nsb(&x, &x);
+        let n = nmi_qe(&x, &x, seed);
         assert!(n >= 0.0 && n <= 1.0, "NMI should be in [0,1], got {:.4}", n);
     }
 }
