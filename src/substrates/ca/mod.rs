@@ -41,7 +41,7 @@ pub mod universe;
 
 // Re-export commonly used types
 pub use hypotheses::generate_ca_hypotheses;
-pub use observation::{DensityObserver, FullStateObserver, ParityObserver};
+pub use observation::{CAObserver, DensityObserver, FullStateObserver, ParityObserver};
 pub use rules::CARule;
 pub use schedule::SynchronousCASchedule;
 pub use state::CAState;
