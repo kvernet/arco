@@ -100,6 +100,8 @@ pub struct HypothesisRecord {
     pub property_name: String,
     /// MDL complexity penalty weight.
     pub complexity: f64,
+    /// Hypothesis classification metrics.
+    pub classification_metrics: ClassificationMetrics,
     /// Fraction of test universes where the prediction held.
     pub accuracy: f64,
     /// Accuracy minus complexity penalty.
@@ -115,11 +117,61 @@ impl<R> From<&Hypothesis<R>> for HypothesisRecord {
             condition_desc: h.condition_desc.clone(),
             property_name: h.property_name.clone(),
             complexity: h.complexity,
+            classification_metrics: ClassificationMetrics::default(),
             accuracy: h.accuracy,
             score: h.score,
             survives: h.survives(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+pub struct ClassificationMetrics {
+    /// Fraction of all test universes that are classified correctly.
+    ///
+    /// `accuracy = (TP + TN) / (TP + TN + FP + FN)`
+    pub accuracy: f64,
+
+    /// Fraction of predicted-positive universes that are actually positive.
+    ///
+    /// `precision = TP / (TP + FP)`
+    pub precision: f64,
+
+    /// Fraction of actual-positive universes that are predicted positive.
+    ///
+    /// `recall = TP / (TP + FN)`
+    pub recall: f64,
+
+    /// Fraction of actual-negative universes that are predicted negative.
+    ///
+    /// `specificity = TN / (TN + FP)`
+    pub specificity: f64,
+
+    /// Mean of recall and specificity.
+    ///
+    /// `balanced_accuracy = (recall + specificity) / 2`
+    pub balanced_accuracy: f64,
+
+    /// Fraction of all test universes satisfying the hypothesis condition.
+    ///
+    /// `coverage = (TP + FP) / total`
+    pub coverage: f64,
+
+    /// Accuracy minus complexity penalty.
+    pub score: f64,
+
+    /// Number of true positives.
+    pub true_positive: usize,
+
+    /// Number of false positives.
+    pub false_positive: usize,
+
+    /// Number of false negatives.
+    pub false_negative: usize,
+
+    /// Number of true negatives.
+    pub true_negative: usize,
 }
 
 impl<U: InformationUniverse> ResearchRecord<U> {

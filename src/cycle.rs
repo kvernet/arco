@@ -40,7 +40,7 @@ use crate::calibration::CalibrationConfig;
 use crate::calibration::{calibrate, generate_trajectories};
 use crate::hypotheses::{Hypothesis, surviving_hypotheses};
 use crate::metrics::{Estimator, MetricConfig, memory, persistence, storage};
-use crate::record::{HypothesisRecord, ResearchRecord, UniverseResult};
+use crate::record::{ClassificationMetrics, HypothesisRecord, ResearchRecord, UniverseResult};
 use crate::rules::Rule;
 use crate::types::BooleanTester;
 use crate::types::TestEnsembles;
@@ -309,6 +309,7 @@ pub fn run_cycle<U: InformationUniverse>(
             );
         });
 
+    let mut classes = Vec::with_capacity(hypotheses.len());
     for h in hypotheses.iter_mut() {
         let threshold = record
             .thresholds
@@ -316,19 +317,25 @@ pub fn run_cycle<U: InformationUniverse>(
             .copied()
             .unwrap_or(0.0);
 
-        let result = hypothesis_accuracy::<U>(
+        let class = hypothesis_classification_metrics::<U>(
             h,
             &test_subsets,
             &test_ensembles,
             threshold,
             &ca_config.metric,
         );
-
-        h.accuracy = result.accuracy;
-        h.score = h.accuracy - 0.1 * h.complexity;
+        classes.push(class);
     }
 
-    record.hypotheses = hypotheses.iter().map(HypothesisRecord::from).collect();
+    record.hypotheses = hypotheses
+        .iter()
+        .zip(classes.iter())
+        .map(|(h, c)| {
+            let mut r = HypothesisRecord::from(h);
+            r.classification_metrics = *c;
+            r
+        })
+        .collect();
 
     // ================================================================
     // STEP 5: BOOLEAN VERIFICATION (OPTIONAL)
@@ -375,63 +382,6 @@ pub fn run_cycle<U: InformationUniverse>(
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct HypothesisAccuracy {
-    pub positive: usize,
-    pub correct: usize,
-    pub accuracy: f64,
-}
-
-/// Compute conditional held-out accuracy for one hypothesis.
-///
-/// Only universes satisfying the hypothesis condition are counted.
-/// Among those, accuracy is the fraction whose measured property
-/// exceeds the calibrated threshold:
-///
-/// `accuracy = correct / positive`
-///
-/// It is therefore NOT balanced accuracy or ordinary classification
-/// accuracy.
-pub fn hypothesis_accuracy<U: InformationUniverse>(
-    hypothesis: &Hypothesis<U::Rule>,
-    test_subsets: &[(Vec<U::Rule>, f64)],
-    test_ensembles: &TestEnsembles<U>,
-    threshold: f64,
-    metric: &MetricConfig,
-) -> HypothesisAccuracy {
-    let mut positive = 0usize;
-    let mut correct = 0usize;
-
-    for ((rules, _ratio), ensemble) in test_subsets.iter().zip(test_ensembles.iter()) {
-        if (hypothesis.condition_fn)(rules) {
-            positive += 1;
-
-            let metric_value = match hypothesis.property_name.as_str() {
-                "persistence" => persistence(ensemble, 1, metric),
-                "storage" => storage(ensemble, metric),
-                "memory" => memory(ensemble, metric),
-                _ => 0.0,
-            };
-
-            if metric_value > threshold {
-                correct += 1;
-            }
-        }
-    }
-
-    let accuracy = if positive > 0 {
-        correct as f64 / positive as f64
-    } else {
-        0.0
-    };
-
-    HypothesisAccuracy {
-        positive,
-        correct,
-        accuracy,
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
 pub struct HypothesisClassificationMetrics {
     /// P(actual positive | predicted positive)
     ///
@@ -461,34 +411,52 @@ pub struct HypothesisClassificationMetrics {
     pub true_negative: usize,
 }
 
-/// Compute classification metrics for one hypothesis on held-out test data.
+/// Compute standard binary classification metrics for one hypothesis on
+/// held-out test data.
 ///
 /// The hypothesis condition determines the predicted class, while the
-/// measured property determines the actual class:
+/// measured property relative to `threshold` determines the actual class:
 ///
-/// - predicted positive: the universe satisfies the hypothesis condition
-/// - actual positive: the measured property exceeds `threshold`
+/// - **predicted positive**: the universe satisfies the hypothesis condition
+/// - **predicted negative**: the universe does not satisfy the hypothesis
+///   condition
+/// - **actual positive**: the measured property exceeds `threshold`
+/// - **actual negative**: the measured property does not exceed `threshold`
+///
+/// The confusion matrix is therefore:
+///
+/// ```text
+///                         Actual positive    Actual negative
+/// Predicted positive          TP                  FP
+/// Predicted negative          FN                  TN
+/// ```
 ///
 /// The returned metrics are:
 ///
-/// - `conditional_accuracy`: fraction of predicted positives whose measured
-///   property exceeds the threshold. This is equivalent to precision.
+/// - `accuracy`: `(TP + TN) / total`
 /// - `precision`: `TP / (TP + FP)`
 /// - `recall`: `TP / (TP + FN)`
 /// - `specificity`: `TN / (TN + FP)`
 /// - `balanced_accuracy`: `(recall + specificity) / 2`
-/// - `coverage`: fraction of test universes satisfying the hypothesis condition,
-///   `(TP + FP) / total`
+/// - `coverage`: `(TP + FP) / total`
 ///
-/// Universes are counted once, and only held-out test subsets are considered.
+/// `coverage` measures how frequently the hypothesis condition is satisfied
+/// in the held-out test data. It is not a classification-quality metric, but
+/// is useful for interpreting the other metrics: a hypothesis with excellent
+/// precision but very low coverage applies to only a small fraction of the
+/// test universes.
+///
+/// Only held-out test subsets are considered. Each test subset is paired with
+/// its corresponding test ensemble by position.
+///
 /// If a metric has a zero denominator, its value is returned as `0.0`.
-pub fn hypothesis_classification_metrics<U: InformationUniverse>(
-    hypothesis: &Hypothesis<U::Rule>,
+fn hypothesis_classification_metrics<U: InformationUniverse>(
+    hypothesis: &mut Hypothesis<U::Rule>,
     test_subsets: &[(Vec<U::Rule>, f64)],
     test_ensembles: &TestEnsembles<U>,
     threshold: f64,
     metric: &MetricConfig,
-) -> HypothesisClassificationMetrics {
+) -> ClassificationMetrics {
     let mut true_positive = 0usize;
     let mut false_positive = 0usize;
     let mut false_negative = 0usize;
@@ -516,45 +484,55 @@ pub fn hypothesis_classification_metrics<U: InformationUniverse>(
 
     let total = true_positive + false_positive + false_negative + true_negative;
 
-    let predicted_positive = true_positive + false_positive;
-    let actual_positive = true_positive + false_negative;
-    let actual_negative = true_negative + false_positive;
-
-    let conditional_accuracy = if predicted_positive > 0 {
-        true_positive as f64 / predicted_positive as f64
+    let accuracy = if total > 0 {
+        (true_positive + true_negative) as f64 / total as f64
     } else {
         0.0
     };
 
-    let precision = conditional_accuracy;
-
-    let recall = if actual_positive > 0 {
-        true_positive as f64 / actual_positive as f64
+    let precision_denominator = true_positive + false_positive;
+    let precision = if precision_denominator > 0 {
+        true_positive as f64 / precision_denominator as f64
     } else {
         0.0
     };
 
-    let specificity = if actual_negative > 0 {
-        true_negative as f64 / actual_negative as f64
+    let recall_denominator = true_positive + false_negative;
+    let recall = if recall_denominator > 0 {
+        true_positive as f64 / recall_denominator as f64
+    } else {
+        0.0
+    };
+
+    let specificity_denominator = true_negative + false_positive;
+    let specificity = if specificity_denominator > 0 {
+        true_negative as f64 / specificity_denominator as f64
     } else {
         0.0
     };
 
     let balanced_accuracy = (recall + specificity) / 2.0;
 
-    let coverage = if total > 0 {
-        predicted_positive as f64 / total as f64
+    let coverage_denominator = total;
+    let coverage = if coverage_denominator > 0 {
+        (true_positive + false_positive) as f64 / coverage_denominator as f64
     } else {
         0.0
     };
 
-    HypothesisClassificationMetrics {
-        conditional_accuracy,
+    // Update hypothesis
+    hypothesis.accuracy = precision;
+    let score = precision - 0.1 * hypothesis.complexity;
+    hypothesis.score = score;
+
+    ClassificationMetrics {
+        accuracy,
         precision,
         recall,
         specificity,
         balanced_accuracy,
         coverage,
+        score,
         true_positive,
         false_positive,
         false_negative,
