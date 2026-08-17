@@ -234,8 +234,9 @@ fn main() {
 
     let estimators = [
         ("plugin", Estimator::Plugin),
-        ("MM", Estimator::MillerMadow),
+        ("MM", Estimator::MM),
         ("QE", Estimator::QE),
+        ("NSB", Estimator::NSB),
     ];
 
     // Store results for n=256 to reuse later
@@ -252,6 +253,7 @@ fn main() {
         let mut plugin_means = Vec::new();
         let mut mm_means = Vec::new();
         let mut qe_means = Vec::new();
+        let mut nsb_means = Vec::new();
 
         // Expected coverage: 1 - e^(-n/N) of states sampled
         let coverage = 1.0 - (-(n_ens as f64) / (N_STATES as f64)).exp();
@@ -275,13 +277,14 @@ fn main() {
 
             match *est {
                 Estimator::Plugin => plugin_means = means,
-                Estimator::MillerMadow => {
+                Estimator::MM => {
                     mm_means = means;
                     if n_ens == 256 {
                         mm_means_at_256 = mm_means.clone();
                     }
                 }
                 Estimator::QE => qe_means = means,
+                Estimator::NSB => nsb_means = means,
             }
 
             println!(
@@ -296,12 +299,12 @@ fn main() {
         fs::create_dir_all(data_dir).ok();
         let path = format!("{}/n{:03}.csv", data_dir, n_ens);
         let mut w = File::create(&path).expect("Failed to create file");
-        writeln!(w, "rule,exact,plugin,mm,qe").unwrap();
+        writeln!(w, "rule,exact,plugin,mm,qe,nsb").unwrap();
         for r in 0..256 {
             writeln!(
                 w,
-                "{},{:.6},{:.6},{:.6},{:.6}",
-                r, exact[r], plugin_means[r], mm_means[r], qe_means[r]
+                "{},{:.6},{:.6},{:.6},{:.6},{:.6}",
+                r, exact[r], plugin_means[r], mm_means[r], qe_means[r], nsb_means[r]
             )
             .unwrap();
         }

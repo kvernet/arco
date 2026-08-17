@@ -54,11 +54,15 @@ struct SharedArgs {
     #[arg(long, default_value = "300")]
     test: usize,
 
+    /// Nominal alphabet size for NSB estimator
+    #[arg(long, default_value = "256")]
+    k: usize,
+
     /// Random seed for reproducibility
     #[arg(long, default_value = "42")]
     seed: u64,
 
-    /// MI estimator: plugin, mm, qe
+    /// MI estimator: plugin, mm, qe, nsb
     #[arg(long, default_value = "plugin")]
     estimator: String,
 
@@ -126,13 +130,20 @@ fn cycle_config(shared: &SharedArgs) -> CycleConfig {
         }
     } else {
         let estimator = match shared.estimator.as_str() {
-            "mm" => Estimator::MillerMadow,
+            "mm" => Estimator::MM,
             "qe" => Estimator::QE,
+            "nsb" => Estimator::NSB,
             _ => Estimator::Plugin,
         };
         CycleConfig {
             n_train: shared.train,
             n_test: shared.test,
+            k_x: shared.k,
+            k_y: shared.k,
+            k_xy: shared
+                .k
+                .checked_mul(shared.k)
+                .expect("joint alphabet cardinality overflow"),
             seed: shared.seed,
             estimator,
             ..CycleConfig::default()

@@ -137,6 +137,26 @@ pub fn nmi_qe<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T], seed: u64) -> f64 
     (mi / (h_x * h_y).sqrt()).clamp(0.0, 1.0)
 }
 
+// ============================================================================
+// Shuffle correction
+// ============================================================================
+
+/// Parameters for shuffle correction.
+///
+/// This avoids an high-argument public function and keeps the numerical
+/// configuration separate from the shuffle procedure.
+#[derive(Clone, Copy, Debug)]
+pub struct QEShuffleConfig {
+    pub n_shuffles: usize,
+    pub seed: u64,
+}
+
+impl QEShuffleConfig {
+    pub fn new(n_shuffles: usize, seed: u64) -> Self {
+        Self { n_shuffles, seed }
+    }
+}
+
 /// QE + shuffle correction.
 ///
 /// Applies QE to each estimate (observed and shuffled), then
@@ -148,31 +168,30 @@ pub fn nmi_qe<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T], seed: u64) -> f64 
 pub fn shuffle_corrected_qe<T: Eq + Hash + Clone>(
     x_seq: &[T],
     y_seq: &[T],
-    n_shuffles: usize,
-    seed: u64,
+    config: &QEShuffleConfig,
 ) -> f64 {
     if x_seq.len() < 4 || y_seq.len() < 4 {
         return 0.0;
     }
 
-    let nmi_obs = nmi_qe(x_seq, y_seq, seed);
+    let nmi_obs = nmi_qe(x_seq, y_seq, config.seed);
     if nmi_obs == 0.0 {
         return 0.0;
     }
 
-    let mut rng = StdRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(config.seed);
     let mut y_shuffled: Vec<T> = y_seq.to_vec();
-    let mut nmi_shuffles = Vec::with_capacity(n_shuffles);
+    let mut nmi_shuffles = Vec::with_capacity(config.n_shuffles);
 
-    for _ in 0..n_shuffles {
+    for _ in 0..config.n_shuffles {
         for i in (1..y_shuffled.len()).rev() {
             let j = rng.random_range(0..=i);
             y_shuffled.swap(i, j);
         }
-        nmi_shuffles.push(nmi_qe(x_seq, &y_shuffled, seed));
+        nmi_shuffles.push(nmi_qe(x_seq, &y_shuffled, config.seed));
     }
 
-    let mean_shuffle: f64 = nmi_shuffles.iter().sum::<f64>() / n_shuffles as f64;
+    let mean_shuffle: f64 = nmi_shuffles.iter().sum::<f64>() / config.n_shuffles as f64;
     (nmi_obs - mean_shuffle).clamp(0.0, 1.0)
 }
 

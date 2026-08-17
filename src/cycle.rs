@@ -68,6 +68,10 @@ pub struct CycleConfig {
     pub max_delta: usize,
     /// Number of shuffles for bias correction.
     pub n_shuffles: usize,
+    /// Nominal alphabet size for NSB estimator.
+    pub k_x: usize,
+    pub k_y: usize,
+    pub k_xy: usize,
     /// Number of null universes for calibration.
     pub n_null_universes: usize,
     /// Random seed for reproducibility.
@@ -85,6 +89,9 @@ impl Default for CycleConfig {
             steps: 60,
             max_delta: 15,
             n_shuffles: 10,
+            k_x: 256,
+            k_y: 256,
+            k_xy: 256,
             n_null_universes: 30,
             seed: 42,
             estimator: Estimator::Plugin,
@@ -189,14 +196,14 @@ pub fn run_cycle<U: InformationUniverse>(
         estimator: config.estimator,
         max_delta: config.max_delta,
         n_shuffles: config.n_shuffles,
+        k_x: config.k_x,
+        k_y: config.k_y,
+        k_xy: config.k_xy,
         seed: config.seed,
     };
     let ca_config = CalibrationConfig {
         metric: met_config,
-        percentile: 95.0,
-        floor_persistence: 0.01,
-        floor_storage: 0.01,
-        floor_memory: 0.01,
+        ..CalibrationConfig::default()
     };
     let calibration = calibrate(
         universe,

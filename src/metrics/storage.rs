@@ -1,15 +1,38 @@
 use std::hash::Hash;
 
 use crate::metrics::{
-    Estimator, MetricConfig, mm::shuffle_corrected_mm, qe::shuffle_corrected_qe,
-    shuffle::shuffle_corrected,
+    Estimator, MetricConfig,
+    mm::{MMShuffleConfig, shuffle_corrected_mm},
+    nsb::{NsbShuffleConfig, shuffle_corrected_nsb},
+    qe::{QEShuffleConfig, shuffle_corrected_qe},
+    shuffle::{ShuffleConfig, shuffle_corrected},
 };
 
 pub fn corrected_nmi<T: Eq + Hash + Clone>(x: &[T], y: &[T], config: &MetricConfig) -> f64 {
     match config.estimator {
-        Estimator::Plugin => shuffle_corrected(x, y, config.n_shuffles, config.seed),
-        Estimator::MillerMadow => shuffle_corrected_mm(x, y, config.n_shuffles, config.seed),
-        Estimator::QE => shuffle_corrected_qe(x, y, config.n_shuffles, config.seed),
+        Estimator::Plugin => {
+            let plugin_config = ShuffleConfig::new(config.n_shuffles, config.seed);
+            shuffle_corrected(x, y, &plugin_config)
+        }
+        Estimator::MM => {
+            let mm_config = MMShuffleConfig::new(config.n_shuffles, config.seed);
+            shuffle_corrected_mm(x, y, &mm_config)
+        }
+        Estimator::QE => {
+            let qe_config = QEShuffleConfig::new(config.n_shuffles, config.seed);
+            shuffle_corrected_qe(x, y, &qe_config)
+        }
+        Estimator::NSB => {
+            let nsb_config = NsbShuffleConfig {
+                k_x: config.k_x,
+                k_y: config.k_y,
+                k_xy: config.k_xy,
+                n_shuffles: config.n_shuffles,
+                seed: config.seed,
+                ..NsbShuffleConfig::default()
+            };
+            shuffle_corrected_nsb(x, y, &nsb_config)
+        }
     }
 }
 

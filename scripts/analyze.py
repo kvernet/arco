@@ -6,6 +6,11 @@ from collections import defaultdict
 
 DATA_DIR = sys.argv[1] if len(sys.argv) > 1 else "sweep_data"
 
+N_SEEDS = 10
+SUBSTRATES = ["graph", "ca"]
+ESTIMATORS = ["plugin", "mm", "qe", "nsb"]
+
+
 def load_records(substrate, estimator):
     records = {}
     prefix = f"{substrate}_{estimator}_"
@@ -80,12 +85,11 @@ def spectrum_summary(records, brackets):
 
 def estimator_comparison(records_map, substrate, key_hypothesis):
     """Generate estimator comparison table."""
-    estimators = ["plugin", "mm", "qe"]
     lines = []
     lines.append(f"| Substrate | Estimator | Storage Rate | Structured Storage | {key_hypothesis} Acc | Survival |")
     lines.append(f"|-----------|-----------|-------------|-------------------|----------|----------|")
     
-    for est in estimators:
+    for est in ESTIMATORS:
         records = records_map.get((substrate, est), {})
         if not records:
             continue
@@ -129,12 +133,12 @@ def spectrum_table(spectrum):
 # Main
 # ================================================================
 
-N_SEEDS = 10
+
 
 # Load all records
 records_map = {}
-for substrate in ["graph", "ca"]:
-    for est in ["plugin", "mm", "qe"]:
+for substrate in SUBSTRATES:
+    for est in ESTIMATORS:
         records = load_records(substrate, est)
         if records:
             records_map[(substrate, est)] = records

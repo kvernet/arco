@@ -11,6 +11,7 @@
 
 pub mod entropy;
 pub mod mm;
+pub mod nsb;
 pub mod persistence;
 pub mod qe;
 pub mod separation;
@@ -29,9 +30,11 @@ pub enum Estimator {
     /// Default Plugin estimator
     Plugin,
     /// Miller-Madow estimator
-    MillerMadow,
+    MM,
     /// Quadratic Extrapolation estimator
     QE,
+    /// Nemenman-Shafee-Bialek
+    NSB,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +42,10 @@ pub struct MetricConfig {
     pub estimator: Estimator,
     pub max_delta: usize,
     pub n_shuffles: usize,
+    /// Nominal alphabet size for NSB estimator.
+    pub k_x: usize,
+    pub k_y: usize,
+    pub k_xy: usize,
     pub seed: u64,
 }
 
@@ -48,6 +55,9 @@ impl Default for MetricConfig {
             estimator: Estimator::Plugin,
             max_delta: 15,
             n_shuffles: 10,
+            k_x: 256,
+            k_y: 256,
+            k_xy: 256 * 256,
             seed: 42,
         }
     }
