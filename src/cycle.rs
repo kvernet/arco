@@ -316,29 +316,15 @@ pub fn run_cycle<U: InformationUniverse>(
             .copied()
             .unwrap_or(0.0);
 
-        let mut positive = 0usize;
-        let mut correct = 0usize;
+        let result = hypothesis_accuracy::<U>(
+            h,
+            &test_subsets,
+            &test_ensembles,
+            threshold,
+            &ca_config.metric,
+        );
 
-        for ((rules, _ratio), ensemble) in test_subsets.iter().zip(test_ensembles.iter()) {
-            if (h.condition_fn)(rules) {
-                positive += 1;
-                let metric_value = match h.property_name.as_str() {
-                    "persistence" => persistence(ensemble, 1, &ca_config.metric),
-                    "storage" => storage(ensemble, &ca_config.metric),
-                    "memory" => memory(ensemble, &ca_config.metric),
-                    _ => 0.0,
-                };
-                if metric_value > threshold {
-                    correct += 1;
-                }
-            }
-        }
-
-        h.accuracy = if positive > 0 {
-            correct as f64 / positive as f64
-        } else {
-            0.0
-        };
+        h.accuracy = result.accuracy;
         h.score = h.accuracy - 0.1 * h.complexity;
     }
 
@@ -386,4 +372,192 @@ pub fn run_cycle<U: InformationUniverse>(
 
     record.elapsed_seconds = t0.elapsed().as_secs_f64();
     record
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HypothesisAccuracy {
+    pub positive: usize,
+    pub correct: usize,
+    pub accuracy: f64,
+}
+
+/// Compute conditional held-out accuracy for one hypothesis.
+///
+/// Only universes satisfying the hypothesis condition are counted.
+/// Among those, accuracy is the fraction whose measured property
+/// exceeds the calibrated threshold:
+///
+/// `accuracy = correct / positive`
+///
+/// It is therefore NOT balanced accuracy or ordinary classification
+/// accuracy.
+pub fn hypothesis_accuracy<U: InformationUniverse>(
+    hypothesis: &Hypothesis<U::Rule>,
+    test_subsets: &[(Vec<U::Rule>, f64)],
+    test_ensembles: &TestEnsembles<U>,
+    threshold: f64,
+    metric: &MetricConfig,
+) -> HypothesisAccuracy {
+    let mut positive = 0usize;
+    let mut correct = 0usize;
+
+    for ((rules, _ratio), ensemble) in test_subsets.iter().zip(test_ensembles.iter()) {
+        if (hypothesis.condition_fn)(rules) {
+            positive += 1;
+
+            let metric_value = match hypothesis.property_name.as_str() {
+                "persistence" => persistence(ensemble, 1, metric),
+                "storage" => storage(ensemble, metric),
+                "memory" => memory(ensemble, metric),
+                _ => 0.0,
+            };
+
+            if metric_value > threshold {
+                correct += 1;
+            }
+        }
+    }
+
+    let accuracy = if positive > 0 {
+        correct as f64 / positive as f64
+    } else {
+        0.0
+    };
+
+    HypothesisAccuracy {
+        positive,
+        correct,
+        accuracy,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HypothesisClassificationMetrics {
+    /// P(actual positive | predicted positive)
+    ///
+    /// This is identical to precision under the definitions used here.
+    pub conditional_accuracy: f64,
+
+    /// TP / (TP + FP)
+    pub precision: f64,
+
+    /// TP / (TP + FN)
+    pub recall: f64,
+
+    /// TN / (TN + FP)
+    pub specificity: f64,
+
+    /// (recall + specificity) / 2
+    pub balanced_accuracy: f64,
+
+    /// Fraction of all test universes satisfying the hypothesis condition.
+    ///
+    /// (TP + FP) / total
+    pub coverage: f64,
+
+    pub true_positive: usize,
+    pub false_positive: usize,
+    pub false_negative: usize,
+    pub true_negative: usize,
+}
+
+/// Compute classification metrics for one hypothesis on held-out test data.
+///
+/// The hypothesis condition determines the predicted class, while the
+/// measured property determines the actual class:
+///
+/// - predicted positive: the universe satisfies the hypothesis condition
+/// - actual positive: the measured property exceeds `threshold`
+///
+/// The returned metrics are:
+///
+/// - `conditional_accuracy`: fraction of predicted positives whose measured
+///   property exceeds the threshold. This is equivalent to precision.
+/// - `precision`: `TP / (TP + FP)`
+/// - `recall`: `TP / (TP + FN)`
+/// - `specificity`: `TN / (TN + FP)`
+/// - `balanced_accuracy`: `(recall + specificity) / 2`
+/// - `coverage`: fraction of test universes satisfying the hypothesis condition,
+///   `(TP + FP) / total`
+///
+/// Universes are counted once, and only held-out test subsets are considered.
+/// If a metric has a zero denominator, its value is returned as `0.0`.
+pub fn hypothesis_classification_metrics<U: InformationUniverse>(
+    hypothesis: &Hypothesis<U::Rule>,
+    test_subsets: &[(Vec<U::Rule>, f64)],
+    test_ensembles: &TestEnsembles<U>,
+    threshold: f64,
+    metric: &MetricConfig,
+) -> HypothesisClassificationMetrics {
+    let mut true_positive = 0usize;
+    let mut false_positive = 0usize;
+    let mut false_negative = 0usize;
+    let mut true_negative = 0usize;
+
+    for ((rules, _ratio), ensemble) in test_subsets.iter().zip(test_ensembles.iter()) {
+        let predicted_positive = (hypothesis.condition_fn)(rules);
+
+        let metric_value = match hypothesis.property_name.as_str() {
+            "persistence" => persistence(ensemble, 1, metric),
+            "storage" => storage(ensemble, metric),
+            "memory" => memory(ensemble, metric),
+            _ => 0.0,
+        };
+
+        let actual_positive = metric_value > threshold;
+
+        match (predicted_positive, actual_positive) {
+            (true, true) => true_positive += 1,
+            (true, false) => false_positive += 1,
+            (false, true) => false_negative += 1,
+            (false, false) => true_negative += 1,
+        }
+    }
+
+    let total = true_positive + false_positive + false_negative + true_negative;
+
+    let predicted_positive = true_positive + false_positive;
+    let actual_positive = true_positive + false_negative;
+    let actual_negative = true_negative + false_positive;
+
+    let conditional_accuracy = if predicted_positive > 0 {
+        true_positive as f64 / predicted_positive as f64
+    } else {
+        0.0
+    };
+
+    let precision = conditional_accuracy;
+
+    let recall = if actual_positive > 0 {
+        true_positive as f64 / actual_positive as f64
+    } else {
+        0.0
+    };
+
+    let specificity = if actual_negative > 0 {
+        true_negative as f64 / actual_negative as f64
+    } else {
+        0.0
+    };
+
+    let balanced_accuracy = (recall + specificity) / 2.0;
+
+    let coverage = if total > 0 {
+        predicted_positive as f64 / total as f64
+    } else {
+        0.0
+    };
+
+    HypothesisClassificationMetrics {
+        conditional_accuracy,
+        precision,
+        recall,
+        specificity,
+        balanced_accuracy,
+        coverage,
+        true_positive,
+        false_positive,
+        false_negative,
+        true_negative,
+    }
 }
