@@ -381,36 +381,6 @@ pub fn run_cycle<U: InformationUniverse>(
     record
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct HypothesisClassificationMetrics {
-    /// P(actual positive | predicted positive)
-    ///
-    /// This is identical to precision under the definitions used here.
-    pub conditional_accuracy: f64,
-
-    /// TP / (TP + FP)
-    pub precision: f64,
-
-    /// TP / (TP + FN)
-    pub recall: f64,
-
-    /// TN / (TN + FP)
-    pub specificity: f64,
-
-    /// (recall + specificity) / 2
-    pub balanced_accuracy: f64,
-
-    /// Fraction of all test universes satisfying the hypothesis condition.
-    ///
-    /// (TP + FP) / total
-    pub coverage: f64,
-
-    pub true_positive: usize,
-    pub false_positive: usize,
-    pub false_negative: usize,
-    pub true_negative: usize,
-}
-
 /// Compute standard binary classification metrics for one hypothesis on
 /// held-out test data.
 ///
@@ -521,8 +491,8 @@ fn hypothesis_classification_metrics<U: InformationUniverse>(
     };
 
     // Update hypothesis
-    hypothesis.accuracy = precision;
-    let score = precision - 0.1 * hypothesis.complexity;
+    hypothesis.accuracy = accuracy;
+    let score = hypothesis.accuracy - 0.1 * hypothesis.complexity;
     hypothesis.score = score;
 
     ClassificationMetrics {
