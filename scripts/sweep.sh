@@ -2,8 +2,8 @@
 # Run a 10-seed sweep across all estimators for both substrates.
 # Usage: ./scripts/sweep.sh
 
-SEEDS=(42 99 137 256 512 1024 2048 4096 8192 16384)
-ESTIMATORS=("nsb")
+SEEDS=(7 42 123 1337 2026 31415 65537 8675309 123456789 2147483647)
+ESTIMATORS=("plugin" "mm" "qe" "nsb")
 DATA_DIR="sweep_data"
 mkdir -p "$DATA_DIR"
 

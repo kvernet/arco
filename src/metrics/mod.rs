@@ -8,6 +8,7 @@
 //!   moderate alphabet sizes.
 //! - **QE**: Quadratic Extrapolation estimator for small-sample, large-alphabet
 //!   regimes.
+//! - **NSB**: Nemenman-Shafee-Bialek for finite alphabet.
 
 pub mod entropy;
 pub mod mm;
@@ -19,6 +20,7 @@ pub mod shuffle;
 pub mod storage;
 
 pub use entropy::{dmi, nmi};
+pub use nsb::NsbCardinality;
 pub use persistence::persistence;
 pub use separation::init_separation;
 pub use shuffle::shuffle_corrected;
@@ -40,12 +42,9 @@ pub enum Estimator {
 #[derive(Debug, Clone)]
 pub struct MetricConfig {
     pub estimator: Estimator,
+    pub cardinality: NsbCardinality,
     pub max_delta: usize,
     pub n_shuffles: usize,
-    /// Nominal alphabet size for NSB estimator.
-    pub k_x: usize,
-    pub k_y: usize,
-    pub k_xy: usize,
     pub seed: u64,
 }
 
@@ -53,11 +52,9 @@ impl Default for MetricConfig {
     fn default() -> Self {
         Self {
             estimator: Estimator::Plugin,
+            cardinality: NsbCardinality::Observed,
             max_delta: 15,
             n_shuffles: 10,
-            k_x: 256,
-            k_y: 256,
-            k_xy: 256 * 256,
             seed: 42,
         }
     }

@@ -24,9 +24,7 @@ pub fn corrected_nmi<T: Eq + Hash + Clone>(x: &[T], y: &[T], config: &MetricConf
         }
         Estimator::NSB => {
             let nsb_config = NsbShuffleConfig {
-                k_x: config.k_x,
-                k_y: config.k_y,
-                k_xy: config.k_xy,
+                cardinality: config.cardinality.clone(),
                 n_shuffles: config.n_shuffles,
                 seed: config.seed,
                 ..NsbShuffleConfig::default()

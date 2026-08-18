@@ -39,6 +39,7 @@ use rayon::iter::ParallelIterator;
 use crate::calibration::CalibrationConfig;
 use crate::calibration::{calibrate, generate_trajectories};
 use crate::hypotheses::{Hypothesis, surviving_hypotheses};
+use crate::metrics::NsbCardinality;
 use crate::metrics::{Estimator, MetricConfig, memory, persistence, storage};
 use crate::record::{ClassificationMetrics, HypothesisRecord, ResearchRecord, UniverseResult};
 use crate::rules::Rule;
@@ -68,16 +69,14 @@ pub struct CycleConfig {
     pub max_delta: usize,
     /// Number of shuffles for bias correction.
     pub n_shuffles: usize,
-    /// Nominal alphabet size for NSB estimator.
-    pub k_x: usize,
-    pub k_y: usize,
-    pub k_xy: usize,
     /// Number of null universes for calibration.
     pub n_null_universes: usize,
     /// Random seed for reproducibility.
     pub seed: u64,
     /// The MI estimator
     pub estimator: Estimator,
+    /// NSB estimator cardinality.
+    pub cardinality: NsbCardinality,
 }
 
 impl Default for CycleConfig {
@@ -89,12 +88,10 @@ impl Default for CycleConfig {
             steps: 60,
             max_delta: 15,
             n_shuffles: 10,
-            k_x: 256,
-            k_y: 256,
-            k_xy: 256,
             n_null_universes: 30,
             seed: 42,
             estimator: Estimator::Plugin,
+            cardinality: NsbCardinality::Observed,
         }
     }
 }
@@ -194,11 +191,9 @@ pub fn run_cycle<U: InformationUniverse>(
     // ================================================================
     let met_config = MetricConfig {
         estimator: config.estimator,
+        cardinality: config.cardinality.clone(),
         max_delta: config.max_delta,
         n_shuffles: config.n_shuffles,
-        k_x: config.k_x,
-        k_y: config.k_y,
-        k_xy: config.k_xy,
         seed: config.seed,
     };
     let ca_config = CalibrationConfig {

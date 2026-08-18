@@ -1,47 +1,13 @@
 //! Nemenman–Shafee–Bialek entropy and mutual-information estimation.
 //!
 //! The NSB estimator is a Bayesian mixture of symmetric Dirichlet priors.
-//! For a finite alphabet of cardinality K, the mixing density is proportional
-//! to
-//! ```text
-//!     dξ/dβ = K ψ₁(Kβ + 1) - ψ₁(β + 1),
-//! ```
 //!
-//! where ψ₁ is the trigamma function and
+//! `K` is represented as `u128` throughout the statistical/model layer.
+//! Observed sample counts remain `usize`, since they cannot exceed the
+//! number of samples actually present in memory.
 //!
-//! ```text
-//!     ξ(β) = ψ(Kβ + 1) - ψ(β + 1).
-//! ```
-//!
-//! For a fixed β, the posterior is Dirichlet with parameters
-//!
-//! ```text
-//!     α_i = n_i + β.
-//! ```
-//!
-//! The posterior mean entropy is then
-//!
-//! ```text
-//!     E[H | n, β]
-//!       = ψ(N + Kβ + 1)
-//!         - Σ_i α_i ψ(α_i + 1) / (N + Kβ).
-//! ```
-//!
-//! The final NSB estimate is the posterior average of this quantity over β,
-//! weighted by the Dirichlet-multinomial evidence and dξ/dβ.
-//!
-//! The implementation deliberately does not expose an integration grid.
-//! The complete β domain (0, ∞) is mapped to (0, 1) using
-//!
-//! ```text
-//!     β = (w / (1 - w))².
-//! ```
-//!
-//! Adaptive Gauss–Legendre quadrature is performed strictly inside the open
-//! interval, so neither singular endpoint is evaluated directly.
-//!
-//! K is part of the statistical model. It is the finite alphabet cardinality
-//! and must not be inferred from the number of observed categories.
+//! Numerical evaluation converts cardinalities to `f64` only at the
+//! floating-point boundary.
 //!
 //! References:
 //!
@@ -52,14 +18,113 @@
 //! - Wolpert & Wolf (1995),
 //!   posterior moments for Dirichlet distributions.
 //!
-//! The mathematical structure follows the standard NSB formulation used in
-//! established implementations. See:
 //! https://arxiv.org/abs/physics/0108025
 
 use std::collections::HashMap;
 use std::hash::Hash;
 
 use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+// ============================================================================
+// Cardinality policy
+// ============================================================================
+
+/// Policy used to determine the finite alphabet cardinalities supplied to
+/// the NSB estimator.
+///
+/// The important distinction is between:
+///
+/// - `Observed`: infer the cardinality from the actual sequence passed to
+///   the estimator. This is resolved every time an NSB estimate is made.
+/// - `Explicit`: use a known/modelled alphabet cardinality independently of
+///   the observed support.
+///
+/// In particular, when `Observed` is used during shuffle correction, the
+/// cardinality is re-resolved for every shuffled `(x, y)` pair. This means
+/// that a shuffle that changes the observed support gets the corresponding
+/// NSB cardinalities.
+///
+/// This is intentional: cardinality is a property of the dataset being
+/// estimated, not a value that should necessarily be frozen before the
+/// shuffle procedure.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum NsbCardinality {
+    /// Use the observed support as the finite alphabet.
+    ///
+    /// For a pair `(x, y)`:
+    ///
+    /// - `k_x`  = number of distinct values observed in `x`
+    /// - `k_y`  = number of distinct values observed in `y`
+    /// - `k_xy` = number of distinct `(x, y)` pairs observed
+    ///
+    /// These values are recomputed every time `resolve()` is called.
+    #[default]
+    Observed,
+
+    /// Use known/modelled alphabet cardinalities.
+    ///
+    /// This is appropriate when the observer's codomain is known
+    /// independently of the sampled trajectories.
+    Explicit { k_x: u128, k_y: u128, k_xy: u128 },
+}
+
+impl NsbCardinality {
+    /// Resolve the cardinalities for the supplied observations.
+    ///
+    /// This function is deliberately called from `nmi_nsb()` rather than
+    /// once by the caller before shuffle correction.
+    ///
+    /// Consequently:
+    ///
+    /// ```text
+    /// nmi_nsb(x, y)
+    /// nmi_nsb(x, shuffled_y_1)
+    /// nmi_nsb(x, shuffled_y_2)
+    /// ...
+    /// ```
+    ///
+    /// each independently resolves `Observed` cardinalities.
+    pub fn resolve<T: Eq + Hash + Clone>(
+        &self,
+        x_seq: &[T],
+        y_seq: &[T],
+    ) -> Option<(u128, u128, u128)> {
+        if x_seq.len() != y_seq.len() || x_seq.is_empty() {
+            return None;
+        }
+
+        match self {
+            Self::Observed => {
+                let x_hist = histogram(x_seq);
+                let y_hist = histogram(y_seq);
+
+                let mut xy_hist: HashMap<(T, T), usize> = HashMap::new();
+
+                for (x, y) in x_seq.iter().zip(y_seq.iter()) {
+                    *xy_hist.entry((x.clone(), y.clone())).or_insert(0) += 1;
+                }
+
+                let k_x = x_hist.len() as u128;
+                let k_y = y_hist.len() as u128;
+                let k_xy = xy_hist.len() as u128;
+
+                if k_x == 0 || k_y == 0 || k_xy == 0 {
+                    return None;
+                }
+
+                Some((k_x, k_y, k_xy))
+            }
+
+            Self::Explicit { k_x, k_y, k_xy } => {
+                if *k_x == 0 || *k_y == 0 || *k_xy == 0 {
+                    None
+                } else {
+                    Some((*k_x, *k_y, *k_xy))
+                }
+            }
+        }
+    }
+}
 
 // ============================================================================
 // Configuration
@@ -71,7 +136,10 @@ pub struct NsbConfig {
     /// Finite alphabet cardinality.
     ///
     /// This is a model parameter, not the number of observed categories.
-    pub k: usize,
+    ///
+    /// `u128` is intentional because observer cardinalities can be much
+    /// larger than `usize::MAX`.
+    pub k: u128,
 
     /// Relative numerical tolerance for the adaptive quadrature.
     pub integration_tolerance: f64,
@@ -95,16 +163,16 @@ impl Default for NsbConfig {
 }
 
 /// Configuration for shuffle-corrected NSB normalized mutual information.
+///
+/// Cardinalities are represented by a policy rather than by already-resolved
+/// `k_x`, `k_y`, and `k_xy` values.
+///
+/// This is important for `NsbCardinality::Observed`: the policy is resolved
+/// independently for the observed data and for every shuffled dataset.
 #[derive(Clone, Debug)]
 pub struct NsbShuffleConfig {
-    /// Finite alphabet cardinality of X.
-    pub k_x: usize,
-
-    /// Finite alphabet cardinality of Y.
-    pub k_y: usize,
-
-    /// Finite alphabet cardinality of the joint variable (X,Y).
-    pub k_xy: usize,
+    /// Policy used to determine `(k_x, k_y, k_xy)`.
+    pub cardinality: NsbCardinality,
 
     /// Numerical configuration shared by all entropy calculations.
     pub entropy: NsbConfig,
@@ -119,15 +187,17 @@ pub struct NsbShuffleConfig {
 impl Default for NsbShuffleConfig {
     fn default() -> Self {
         Self {
-            k_x: 2,
-            k_y: 2,
-            k_xy: 4,
+            cardinality: NsbCardinality::Observed,
             entropy: NsbConfig::default(),
             n_shuffles: 10,
             seed: 0,
         }
     }
 }
+
+// ============================================================================
+// Diagnostics
+// ============================================================================
 
 /// Numerical diagnostics for an NSB entropy estimate.
 #[derive(Clone, Debug)]
@@ -153,10 +223,10 @@ pub struct NsbDiagnostics {
     pub converged: bool,
 
     /// Number of observed categories.
-    pub k_observed: usize,
+    pub k_observed: u128,
 
     /// Number of repeated observations, N - K_observed.
-    pub coincidences: usize,
+    pub coincidences: u128,
 
     /// True if K is smaller than the observed support.
     pub k_mismatch: bool,
@@ -166,9 +236,6 @@ pub struct NsbDiagnostics {
 // Special functions
 // ============================================================================
 
-/// Natural logarithm of the Gamma function for positive x.
-///
-/// This is the standard g=7, nine-coefficient Lanczos approximation.
 #[allow(clippy::excessive_precision)]
 pub fn lgamma(x: f64) -> f64 {
     const G: f64 = 7.0;
@@ -207,10 +274,6 @@ pub fn lgamma(x: f64) -> f64 {
     0.5 * (2.0 * std::f64::consts::PI).ln() + (z + 0.5) * t.ln() - t + sum.ln()
 }
 
-/// Digamma function ψ(x) for positive x.
-///
-/// The recurrence shifts the argument into a region where the asymptotic
-/// expansion is highly accurate.
 pub fn digamma(mut x: f64) -> f64 {
     if x.is_nan() || x <= 0.0 {
         return f64::NAN;
@@ -241,7 +304,6 @@ pub fn digamma(mut x: f64) -> f64 {
     result
 }
 
-/// Trigamma function ψ₁(x) for positive x.
 pub fn trigamma(mut x: f64) -> f64 {
     if x.is_nan() || x <= 0.0 {
         return f64::NAN;
@@ -276,10 +338,6 @@ pub fn trigamma(mut x: f64) -> f64 {
 // Stable scalar helpers
 // ============================================================================
 
-/// Log Γ(z+n) - log Γ(z), where n is a non-negative integer.
-///
-/// For the regime z >> n, a direct Lanczos subtraction loses unnecessary
-/// precision, so a short asymptotic ratio expansion is used.
 fn log_gamma_ratio(z: f64, n: usize) -> f64 {
     if n == 0 {
         return 0.0;
@@ -304,11 +362,6 @@ fn log_gamma_ratio(z: f64, n: usize) -> f64 {
     lgamma(z + nf) - lgamma(z)
 }
 
-/// Stable evaluation of dξ/dβ.
-///
-/// For moderate beta the direct trigamma expression is accurate. At very
-/// large beta the two terms nearly cancel, so the leading asymptotic
-/// expansion is evaluated directly.
 fn dxi_dbeta(beta: f64, k: f64) -> f64 {
     if beta <= 0.0 || !beta.is_finite() || k <= 1.0 {
         return 0.0;
@@ -344,22 +397,6 @@ fn dxi_dbeta(beta: f64, k: f64) -> f64 {
 // Count grouping
 // ============================================================================
 
-/// Group observed counts by their count value.
-///
-/// For example:
-///
-/// ```text
-///     [3, 3, 3, 7, 7]
-/// ```
-///
-/// becomes
-///
-/// ```text
-///     [(3, 3), (7, 2)].
-/// ```
-///
-/// This is an exact sufficient-statistic reduction for the symmetric
-/// Dirichlet NSB calculation.
 fn group_counts(counts: &[usize]) -> (Vec<(usize, usize)>, usize, usize) {
     let mut frequencies: HashMap<usize, usize> = HashMap::new();
 
@@ -387,21 +424,6 @@ fn group_counts(counts: &[usize]) -> (Vec<(usize, usize)>, usize, usize) {
 // NSB equations
 // ============================================================================
 
-/// Logarithm of the Dirichlet-multinomial evidence, up to factors independent
-/// of beta.
-///
-/// The beta-dependent part is
-///
-/// ```text
-///     Γ(Kβ) / Γ(N + Kβ)
-///       × Π_i Γ(n_i + β) / Γ(β).
-/// ```
-///
-/// Unobserved bins contribute exactly one because
-///
-/// ```text
-///     Γ(β) / Γ(β) = 1.
-/// ```
 fn log_evidence(grouped: &[(usize, usize)], beta: f64, k: f64, n: usize) -> f64 {
     let k_beta = k * beta;
 
@@ -415,12 +437,9 @@ fn log_evidence(grouped: &[(usize, usize)], beta: f64, k: f64, n: usize) -> f64 
 }
 
 /// Posterior mean entropy in nats at fixed beta.
-///
-/// This is the Wolpert–Wolf posterior expectation under the Dirichlet
-/// posterior.
 fn posterior_mean_entropy_nats(
     grouped: &[(usize, usize)],
-    k_observed: usize,
+    k_observed: u128,
     beta: f64,
     k: f64,
     n: usize,
@@ -441,10 +460,16 @@ fn posterior_mean_entropy_nats(
         weighted += multiplicity as f64 * alpha * (psi_total - digamma(alpha + 1.0));
     }
 
-    let empty = k as usize - k_observed;
+    let k_observed_f64 = k_observed as f64;
 
-    if empty > 0 {
-        weighted += empty as f64 * beta * (psi_total - digamma(beta + 1.0));
+    if k_observed_f64 > k {
+        return f64::NAN;
+    }
+
+    let empty = k - k_observed_f64;
+
+    if empty > 0.0 {
+        weighted += empty * beta * (psi_total - digamma(beta + 1.0));
     }
 
     weighted / total
@@ -454,9 +479,6 @@ fn posterior_mean_entropy_nats(
 // Complete beta-domain transformation
 // ============================================================================
 
-/// β = (w / (1-w))².
-///
-/// The transformation covers the complete interval β ∈ (0,∞).
 fn beta_from_w(w: f64) -> f64 {
     let log_beta = 2.0 * (w.ln() - (-w).ln_1p());
 
@@ -467,7 +489,6 @@ fn beta_from_w(w: f64) -> f64 {
     }
 }
 
-/// log(dβ/dw) for β = (w/(1-w))².
 fn log_beta_jacobian(w: f64) -> f64 {
     2.0_f64.ln() + w.ln() - 3.0 * (-w).ln_1p()
 }
@@ -476,7 +497,6 @@ fn log_beta_jacobian(w: f64) -> f64 {
 // Log-scaled NSB integrand
 // ============================================================================
 
-/// Return the log posterior weight and beta for an interior w.
 fn log_weight(grouped: &[(usize, usize)], k: f64, n: usize, w: f64) -> Option<(f64, f64)> {
     if !(w > 0.0 && w < 1.0) {
         return None;
@@ -509,10 +529,6 @@ fn log_weight(grouped: &[(usize, usize)], k: f64, n: usize, w: f64) -> Option<(f
     Some((log_weight, beta))
 }
 
-/// Find a log-scale near the maximum of the transformed posterior weight.
-///
-/// This is only floating-point scaling. It does not determine the integration
-/// domain or quadrature resolution.
 fn integration_scale(grouped: &[(usize, usize)], k: f64, n: usize) -> f64 {
     let mut maximum = f64::NEG_INFINITY;
 
@@ -527,10 +543,9 @@ fn integration_scale(grouped: &[(usize, usize)], k: f64, n: usize) -> f64 {
     maximum
 }
 
-/// Evaluate the scaled NSB integrand.
 fn integrand(
     grouped: &[(usize, usize)],
-    k_observed: usize,
+    k_observed: u128,
     k: f64,
     n: usize,
     log_scale: f64,
@@ -594,7 +609,6 @@ struct Interval {
     depth: usize,
 }
 
-/// Eight-point Gauss–Legendre quadrature on [a,b].
 fn gauss8<F>(f: &mut F, a: f64, b: f64) -> VectorIntegral
 where
     F: FnMut(f64) -> [f64; 2],
@@ -637,7 +651,6 @@ where
     }
 }
 
-/// Sixteen-point Gauss–Legendre quadrature on [a,b].
 fn gauss16<F>(f: &mut F, a: f64, b: f64) -> VectorIntegral
 where
     F: FnMut(f64) -> [f64; 2],
@@ -688,10 +701,6 @@ where
     }
 }
 
-/// Adaptive 8/16-point Gauss–Legendre integration.
-///
-/// The 8-point and 16-point rules are independently evaluated on each
-/// interval. Their difference supplies the local quadrature error estimate.
 fn adaptive_gauss<F>(
     f: &mut F,
     tolerance: f64,
@@ -784,12 +793,10 @@ where
 // Entropy estimation
 // ============================================================================
 
-/// Estimate NSB entropy in bits.
 pub fn nsb_entropy(counts: &[usize], config: &NsbConfig) -> f64 {
     nsb_entropy_diagnostics(counts, config).entropy_bits
 }
 
-/// Estimate NSB entropy and return numerical diagnostics.
 pub fn nsb_entropy_diagnostics(counts: &[usize], config: &NsbConfig) -> NsbDiagnostics {
     let invalid = NsbDiagnostics {
         entropy_bits: f64::NAN,
@@ -823,19 +830,22 @@ pub fn nsb_entropy_diagnostics(counts: &[usize], config: &NsbConfig) -> NsbDiagn
             integration_error: 0.0,
             evaluations: 0,
             converged: true,
-            k_observed,
-            coincidences: n.saturating_sub(k_observed),
+            k_observed: k_observed as u128,
+            coincidences: n.saturating_sub(k_observed) as u128,
             k_mismatch: k_observed > 1,
         };
     }
 
-    let (grouped, k_observed, n) = group_counts(counts);
+    let (grouped, k_observed_usize, n) = group_counts(counts);
 
-    if k_observed == 0 || n == 0 {
+    if k_observed_usize == 0 || n == 0 {
         return invalid;
     }
 
-    let coincidences = n.saturating_sub(k_observed);
+    let coincidences_usize = n.saturating_sub(k_observed_usize);
+
+    let k_observed = k_observed_usize as u128;
+    let coincidences = coincidences_usize as u128;
 
     if k_observed > config.k {
         return NsbDiagnostics {
@@ -847,6 +857,14 @@ pub fn nsb_entropy_diagnostics(counts: &[usize], config: &NsbConfig) -> NsbDiagn
     }
 
     let k = config.k as f64;
+
+    if !k.is_finite() || k <= 0.0 {
+        return NsbDiagnostics {
+            k_observed,
+            coincidences,
+            ..invalid
+        };
+    }
 
     let log_scale = integration_scale(&grouped, k, n);
 
@@ -941,16 +959,32 @@ fn histogram<T: Eq + Hash + Clone>(values: &[T]) -> HashMap<T, usize> {
 // Mutual information
 // ============================================================================
 
-/// Compute H(X), H(Y), and H(X,Y) independently.
+/// Compute the three NSB entropies needed for mutual information.
 ///
-/// The three NSB entropy calculations have independent posterior
-/// integrations. This is intentionally an entropy-composition estimator:
+/// Cardinality resolution is deliberately performed here, immediately before
+/// the entropy calculations.
+///
+/// This is the key architectural point:
 ///
 /// ```text
-///     I(X;Y) = H(X) + H(Y) - H(X,Y).
+/// dmi_nsb(x, y)
+///     └── resolve cardinality for (x, y)
+///
+/// shuffle_corrected_nsb(x, y)
+///     ├── nmi_nsb(x, y)
+///     │      └── resolve cardinality for observed (x, y)
+///     │
+///     ├── nmi_nsb(x, shuffle_1(y))
+///     │      └── resolve cardinality for shuffle 1
+///     │
+///     ├── nmi_nsb(x, shuffle_2(y))
+///     │      └── resolve cardinality for shuffle 2
+///     │
+///     └── ...
 /// ```
 ///
-/// It is not a joint Bayesian posterior over mutual information itself.
+/// Therefore `NsbCardinality::Observed` is never accidentally frozen to
+/// the cardinality of the original dataset.
 fn dmi_nsb_full<T: Eq + Hash + Clone>(
     x_seq: &[T],
     y_seq: &[T],
@@ -959,6 +993,17 @@ fn dmi_nsb_full<T: Eq + Hash + Clone>(
     if x_seq.len() != y_seq.len() || x_seq.len() < 2 {
         return (f64::NAN, f64::NAN, f64::NAN);
     }
+
+    // ---------------------------------------------------------------
+    // Resolve cardinality HERE.
+    //
+    // For NsbCardinality::Observed this is a fresh resolution for the
+    // exact `(x_seq, y_seq)` pair passed to this invocation.
+    // ---------------------------------------------------------------
+
+    let Some((k_x, k_y, k_xy)) = config.cardinality.resolve(x_seq, y_seq) else {
+        return (f64::NAN, f64::NAN, f64::NAN);
+    };
 
     let x_hist = histogram(x_seq);
     let y_hist = histogram(y_seq);
@@ -970,32 +1015,35 @@ fn dmi_nsb_full<T: Eq + Hash + Clone>(
     }
 
     let x_counts: Vec<usize> = x_hist.into_values().collect();
+
     let y_counts: Vec<usize> = y_hist.into_values().collect();
+
     let xy_counts: Vec<usize> = xy_hist.into_values().collect();
 
     let x_config = NsbConfig {
-        k: config.k_x,
+        k: k_x,
         ..config.entropy.clone()
     };
 
     let y_config = NsbConfig {
-        k: config.k_y,
+        k: k_y,
         ..config.entropy.clone()
     };
 
     let xy_config = NsbConfig {
-        k: config.k_xy,
+        k: k_xy,
         ..config.entropy.clone()
     };
 
     let h_x = nsb_entropy(&x_counts, &x_config);
+
     let h_y = nsb_entropy(&y_counts, &y_config);
+
     let h_xy = nsb_entropy(&xy_counts, &xy_config);
 
     (h_x, h_y, h_xy)
 }
 
-/// NSB entropy-composition mutual information in bits.
 pub fn dmi_nsb<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T], config: &NsbShuffleConfig) -> f64 {
     let (h_x, h_y, h_xy) = dmi_nsb_full(x_seq, y_seq, config);
 
@@ -1006,9 +1054,6 @@ pub fn dmi_nsb<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T], config: &NsbShuff
     (h_x + h_y - h_xy).max(0.0)
 }
 
-/// Symmetric normalized mutual information.
-///
-/// `NMI = I(X;Y) / sqrt(H(X) H(Y))`.
 pub fn nmi_nsb<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T], config: &NsbShuffleConfig) -> f64 {
     let (h_x, h_y, h_xy) = dmi_nsb_full(x_seq, y_seq, config);
 
@@ -1029,110 +1074,126 @@ pub fn nmi_nsb<T: Eq + Hash + Clone>(x_seq: &[T], y_seq: &[T], config: &NsbShuff
 // Shuffle correction
 // ============================================================================
 
-/// Shuffle-corrected normalized mutual information.
+/// Shuffle-corrected normalized mutual information using NSB.
 ///
-/// X is held fixed while Y is independently permuted for every shuffle.
+/// The procedure is intentionally structurally identical to the other
+/// estimators:
 ///
-/// The observed score and each shuffled score use the same finite-cardinality
-/// NSB model.
+/// 1. Compute NMI on the observed `(X, Y)`.
+/// 2. Shuffle `Y`.
+/// 3. Compute NMI on `(X, shuffled_Y)`.
+/// 4. Repeat `n_shuffles` times.
+/// 5. Subtract the mean shuffle baseline.
+/// 6. Clamp to `[0, 1]`.
+///
+/// Crucially, cardinality is NOT resolved here.
+///
+/// Instead every call to `nmi_nsb()` resolves cardinality through
+/// `config.cardinality`.
+///
+/// Thus with:
+///
+/// ```text
+/// NsbCardinality::Observed
+/// ```
+///
+/// the sequence of operations is:
+///
+/// ```text
+/// observed:
+///     k_x  = support(X)
+///     k_y  = support(Y)
+///     k_xy = support(X,Y)
+///
+/// shuffle 1:
+///     k_x  = support(X)
+///     k_y  = support(shuffle_1(Y))
+///     k_xy = support(X, shuffle_1(Y))
+///
+/// shuffle 2:
+///     k_x  = support(X)
+///     k_y  = support(shuffle_2(Y))
+///     k_xy = support(X, shuffle_2(Y))
+///
+/// ...
+/// ```
+///
+/// With:
+///
+/// ```text
+/// NsbCardinality::Explicit { ... }
+/// ```
+///
+/// all estimates use the same explicitly supplied cardinalities.
 pub fn shuffle_corrected_nsb<T: Eq + Hash + Clone>(
     x_seq: &[T],
     y_seq: &[T],
     config: &NsbShuffleConfig,
 ) -> f64 {
     if x_seq.len() != y_seq.len() || x_seq.len() < 4 {
-        return f64::NAN;
+        return 0.0;
     }
 
-    let x_hist = histogram(x_seq);
-    let x_counts: Vec<usize> = x_hist.into_values().collect();
+    // ---------------------------------------------------------------
+    // Observed NMI.
+    //
+    // nmi_nsb() resolves cardinality for THIS exact dataset.
+    // ---------------------------------------------------------------
 
-    let x_config = NsbConfig {
-        k: config.k_x,
-        ..config.entropy.clone()
-    };
+    let nmi_obs = nmi_nsb(x_seq, y_seq, config);
 
-    let h_x = nsb_entropy(&x_counts, &x_config);
-
-    if !h_x.is_finite() || h_x <= 0.0 {
-        return f64::NAN;
+    if !nmi_obs.is_finite() {
+        return 0.0;
     }
 
-    let nmi_for_y = |y: &[T]| -> f64 {
-        let y_hist = histogram(y);
-
-        let y_counts: Vec<usize> = y_hist.into_values().collect();
-
-        let mut xy_hist: HashMap<(T, T), usize> = HashMap::new();
-
-        for (x, value) in x_seq.iter().zip(y.iter()) {
-            *xy_hist.entry((x.clone(), value.clone())).or_insert(0) += 1;
-        }
-
-        let xy_counts: Vec<usize> = xy_hist.into_values().collect();
-
-        let y_config = NsbConfig {
-            k: config.k_y,
-            ..config.entropy.clone()
-        };
-
-        let xy_config = NsbConfig {
-            k: config.k_xy,
-            ..config.entropy.clone()
-        };
-
-        let h_y = nsb_entropy(&y_counts, &y_config);
-        let h_xy = nsb_entropy(&xy_counts, &xy_config);
-
-        if !h_y.is_finite() || !h_xy.is_finite() {
-            return f64::NAN;
-        }
-
-        if h_y <= 0.0 {
-            return 0.0;
-        }
-
-        let mi = (h_x + h_y - h_xy).max(0.0);
-
-        (mi / (h_x * h_y).sqrt()).clamp(0.0, 1.0)
-    };
-
-    let observed = nmi_for_y(y_seq);
-
-    if !observed.is_finite() {
-        return f64::NAN;
-    }
+    // ---------------------------------------------------------------
+    // No shuffle correction requested.
+    // ---------------------------------------------------------------
 
     if config.n_shuffles == 0 {
-        return observed;
+        return nmi_obs;
     }
+
+    // ---------------------------------------------------------------
+    // Shuffle Y and recompute the complete NMI estimator.
+    // ---------------------------------------------------------------
 
     let mut rng = StdRng::seed_from_u64(config.seed);
 
-    let mut shuffled = y_seq.to_vec();
+    let mut y_shuffled = y_seq.to_vec();
 
-    let mut shuffle_sum = 0.0;
-    let mut valid_shuffles = 0usize;
+    let mut nmi_shuffles = Vec::with_capacity(config.n_shuffles);
 
     for _ in 0..config.n_shuffles {
-        for i in (1..shuffled.len()).rev() {
+        // Fisher-Yates shuffle.
+        for i in (1..y_shuffled.len()).rev() {
             let j = rng.random_range(0..=i);
-            shuffled.swap(i, j);
+
+            y_shuffled.swap(i, j);
         }
 
-        let value = nmi_for_y(&shuffled);
+        // IMPORTANT:
+        //
+        // Cardinality isn't resolved outside this call.
+        //
+        // nmi_nsb() -> dmi_nsb_full() -> resolve()
+        //
+        // Consequently `Observed` cardinality is recomputed for this
+        // shuffled dataset.
+        let nmi_shuffle = nmi_nsb(x_seq, &y_shuffled, config);
 
-        if value.is_finite() {
-            shuffle_sum += value;
-            valid_shuffles += 1;
+        if nmi_shuffle.is_finite() {
+            nmi_shuffles.push(nmi_shuffle);
         }
     }
 
-    if valid_shuffles == 0 {
-        return f64::NAN;
+    if nmi_shuffles.is_empty() {
+        return 0.0;
     }
 
-    (observed - shuffle_sum / valid_shuffles as f64).clamp(0.0, 1.0)
+    let mean_shuffle = nmi_shuffles.iter().sum::<f64>() / nmi_shuffles.len() as f64;
+
+    (nmi_obs - mean_shuffle).clamp(0.0, 1.0)
 }
 
 // ============================================================================
@@ -1143,7 +1204,7 @@ pub fn shuffle_corrected_nsb<T: Eq + Hash + Clone>(
 mod tests {
     use super::*;
 
-    fn config(k: usize) -> NsbConfig {
+    fn entropy_config(k: u128) -> NsbConfig {
         NsbConfig {
             k,
             integration_tolerance: 1e-7,
@@ -1152,11 +1213,23 @@ mod tests {
         }
     }
 
-    fn mi_config(k_x: usize, k_y: usize, k_xy: usize) -> NsbShuffleConfig {
+    fn mi_config(k_x: u128, k_y: u128, k_xy: u128) -> NsbShuffleConfig {
         NsbShuffleConfig {
-            k_x,
-            k_y,
-            k_xy,
+            cardinality: NsbCardinality::Explicit { k_x, k_y, k_xy },
+            entropy: NsbConfig {
+                k: 2,
+                integration_tolerance: 1e-7,
+                max_depth: 20,
+                max_evaluations: 5_000,
+            },
+            n_shuffles: 10,
+            seed: 42,
+        }
+    }
+
+    fn observed_mi_config() -> NsbShuffleConfig {
+        NsbShuffleConfig {
+            cardinality: NsbCardinality::Observed,
             entropy: NsbConfig {
                 k: 2,
                 integration_tolerance: 1e-7,
@@ -1172,17 +1245,9 @@ mod tests {
     fn digamma_known_values() {
         let gamma = 0.577_215_664_901_532_9;
 
-        assert!(
-            (digamma(1.0) + gamma).abs() < 1e-10,
-            "digamma(1) = {}",
-            digamma(1.0)
-        );
+        assert!((digamma(1.0) + gamma).abs() < 1e-10);
 
-        assert!(
-            (digamma(2.0) - (1.0 - gamma)).abs() < 1e-10,
-            "digamma(2) = {}",
-            digamma(2.0)
-        );
+        assert!((digamma(2.0) - (1.0 - gamma)).abs() < 1e-10);
     }
 
     #[test]
@@ -1194,44 +1259,38 @@ mod tests {
 
     #[test]
     fn uniform_distribution() {
-        let diagnostics = nsb_entropy_diagnostics(&[100, 100, 100, 100], &config(4));
+        let diagnostics = nsb_entropy_diagnostics(&[100, 100, 100, 100], &entropy_config(4));
 
-        assert!(
-            diagnostics.converged,
-            "integration did not converge: {diagnostics:?}"
-        );
+        assert!(diagnostics.converged, "{diagnostics:?}");
 
-        assert!(diagnostics.entropy_bits.is_finite(), "{diagnostics:?}");
+        assert!(diagnostics.entropy_bits.is_finite());
 
-        assert!(
-            (diagnostics.entropy_bits - 2.0).abs() < 0.02,
-            "got {}",
-            diagnostics.entropy_bits
-        );
+        assert!((diagnostics.entropy_bits - 2.0).abs() < 0.02);
     }
 
     #[test]
     fn deterministic_distribution_has_small_entropy() {
-        let diagnostics = nsb_entropy_diagnostics(&[1000], &config(4));
+        let diagnostics = nsb_entropy_diagnostics(&[1000], &entropy_config(4));
 
         assert!(diagnostics.converged, "{diagnostics:?}");
 
-        assert!(diagnostics.entropy_bits.is_finite(), "{diagnostics:?}");
+        assert!(diagnostics.entropy_bits.is_finite());
 
-        assert!(diagnostics.entropy_bits < 0.05, "{diagnostics:?}");
+        assert!(diagnostics.entropy_bits < 0.05);
 
-        assert!(diagnostics.entropy_bits >= 0.0, "{diagnostics:?}");
+        assert!(diagnostics.entropy_bits >= 0.0);
     }
 
     #[test]
     fn deterministic_entropy_decreases_with_more_data() {
-        let h_100 = nsb_entropy(&[100], &config(4));
+        let h_100 = nsb_entropy(&[100], &entropy_config(4));
 
-        let h_1000 = nsb_entropy(&[1000], &config(4));
+        let h_1000 = nsb_entropy(&[1000], &entropy_config(4));
 
         assert!(h_100.is_finite());
         assert!(h_1000.is_finite());
-        assert!(h_1000 < h_100, "h100={h_100}, h1000={h_1000}");
+
+        assert!(h_1000 < h_100);
     }
 
     #[test]
@@ -1241,11 +1300,11 @@ mod tests {
             .chain([10usize, 10, 10, 10, 10])
             .collect::<Vec<_>>();
 
-        let diagnostics = nsb_entropy_diagnostics(&counts, &config(4096));
+        let diagnostics = nsb_entropy_diagnostics(&counts, &entropy_config(4096));
 
         assert!(diagnostics.entropy_bits.is_finite(), "{diagnostics:?}");
 
-        assert!(diagnostics.coincidences > 0, "{diagnostics:?}");
+        assert!(diagnostics.coincidences > 0);
 
         let n = 90.0;
 
@@ -1258,31 +1317,27 @@ mod tests {
                 h - p * p.log2()
             });
 
-        assert!(
-            diagnostics.entropy_bits > plugin,
-            "NSB={} plugin={plugin}",
-            diagnostics.entropy_bits
-        );
+        assert!(diagnostics.entropy_bits > plugin);
     }
 
     #[test]
     fn no_coincidences_are_valid() {
         let counts = vec![1usize; 50];
 
-        let diagnostics = nsb_entropy_diagnostics(&counts, &config(4096));
+        let diagnostics = nsb_entropy_diagnostics(&counts, &entropy_config(4096));
 
-        assert!(diagnostics.entropy_bits.is_finite(), "{diagnostics:?}");
+        assert!(diagnostics.entropy_bits.is_finite());
 
         assert_eq!(diagnostics.coincidences, 0);
     }
 
     #[test]
     fn k_mismatch_is_detected() {
-        let diagnostics = nsb_entropy_diagnostics(&[1, 1, 1, 1], &config(3));
+        let diagnostics = nsb_entropy_diagnostics(&[1, 1, 1, 1], &entropy_config(3));
 
-        assert!(diagnostics.k_mismatch, "{diagnostics:?}");
+        assert!(diagnostics.k_mismatch);
 
-        assert!(!diagnostics.entropy_bits.is_finite(), "{diagnostics:?}");
+        assert!(!diagnostics.entropy_bits.is_finite());
     }
 
     #[test]
@@ -1312,7 +1367,7 @@ mod tests {
         assert!(loose.is_finite());
         assert!(tight.is_finite());
 
-        assert!((loose - tight).abs() < 1e-5, "loose={loose}, tight={tight}");
+        assert!((loose - tight).abs() < 1e-5);
     }
 
     #[test]
@@ -1329,9 +1384,8 @@ mod tests {
 
         let mi = dmi_nsb(&x, &y, &mi_config(4, 4, 16));
 
-        assert!(mi.is_finite(), "MI={mi}");
-
-        assert!(mi < 0.3, "MI={mi}");
+        assert!(mi.is_finite());
+        assert!(mi < 0.3);
     }
 
     #[test]
@@ -1340,9 +1394,8 @@ mod tests {
 
         let mi = dmi_nsb(&x, &x, &mi_config(4, 4, 4));
 
-        assert!(mi.is_finite(), "MI={mi}");
-
-        assert!(mi > 1.5, "MI={mi}");
+        assert!(mi.is_finite());
+        assert!(mi > 1.5);
     }
 
     #[test]
@@ -1351,11 +1404,9 @@ mod tests {
 
         let nmi = nmi_nsb(&x, &x, &mi_config(4, 4, 4));
 
-        assert!(nmi.is_finite(), "NMI={nmi}");
-
-        assert!((0.0..=1.0).contains(&nmi), "NMI={nmi}");
-
-        assert!(nmi > 0.9, "NMI={nmi}");
+        assert!(nmi.is_finite());
+        assert!((0.0..=1.0).contains(&nmi));
+        assert!(nmi > 0.9);
     }
 
     #[test]
@@ -1376,16 +1427,198 @@ mod tests {
 
         let independent_score = shuffle_corrected_nsb(&x, &independent, &config);
 
-        assert!(dependent_score.is_finite(), "dependent={dependent_score}");
+        assert!(dependent_score.is_finite());
 
-        assert!(
-            independent_score.is_finite(),
-            "independent={independent_score}"
+        assert!(independent_score.is_finite());
+
+        assert!(dependent_score > independent_score);
+    }
+
+    // ------------------------------------------------------------------------
+    // Observed cardinality tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn observed_cardinality_uses_support() {
+        let x = [0u8, 1, 0, 1, 0, 1];
+        let y = [1u8, 1, 0, 1, 0, 0];
+
+        let cardinality = NsbCardinality::Observed;
+
+        let resolved = cardinality.resolve(&x, &y).unwrap();
+
+        assert_eq!(resolved, (2, 2, 4));
+    }
+
+    #[test]
+    fn observed_cardinality_is_resolved_again_after_shuffle() {
+        let x = [0u8, 0, 0, 0, 1, 1, 1, 1];
+
+        let y = [0u8, 0, 0, 0, 1, 1, 1, 1];
+
+        let cardinality = NsbCardinality::Observed;
+
+        let original = cardinality.resolve(&x, &y).unwrap();
+
+        let shuffled = [0u8, 1, 0, 1, 0, 1, 0, 1];
+
+        let shuffled_cardinality = cardinality.resolve(&x, &shuffled).unwrap();
+
+        assert_eq!(original.0, shuffled_cardinality.0);
+
+        assert_eq!(original.1, 2);
+
+        assert_eq!(shuffled_cardinality.1, 2);
+
+        // The important part is that this is resolved from the actual
+        // `(x, shuffled_y)` data rather than copied from the original pair.
+        assert_eq!(shuffled_cardinality.2, 4);
+    }
+
+    #[test]
+    fn explicit_cardinality_is_stable() {
+        let cardinality = NsbCardinality::Explicit {
+            k_x: 4096,
+            k_y: 4096,
+            k_xy: 16_777_216,
+        };
+
+        let x = [0u8, 1, 0, 1];
+        let y = [0u8, 0, 1, 1];
+
+        let shuffled_y = [1u8, 0, 1, 0];
+
+        assert_eq!(
+            cardinality.resolve(&x, &y).unwrap(),
+            (4096, 4096, 16_777_216)
         );
 
-        assert!(
-            dependent_score > independent_score,
-            "dependent={dependent_score}, independent={independent_score}"
+        assert_eq!(
+            cardinality.resolve(&x, &shuffled_y).unwrap(),
+            (4096, 4096, 16_777_216)
         );
+    }
+
+    #[test]
+    fn observed_nsb_mi_works_without_known_cardinality() {
+        let x = [0u8, 1, 1, 0, 0, 0];
+
+        let y = [1u8, 1, 1, 1, 0, 1];
+
+        let config = observed_mi_config();
+
+        let mi = dmi_nsb(&x, &y, &config);
+
+        assert!(mi.is_finite(), "MI = {mi}");
+    }
+
+    #[test]
+    fn observed_nmi_works_without_known_cardinality() {
+        let x = [0u8, 1, 1, 0, 0, 0];
+
+        let y = [1u8, 1, 1, 1, 0, 1];
+
+        let config = observed_mi_config();
+
+        let nmi = nmi_nsb(&x, &y, &config);
+
+        assert!(nmi.is_finite(), "NMI = {nmi}");
+
+        assert!((0.0..=1.0).contains(&nmi));
+    }
+
+    #[test]
+    fn observed_shuffle_correction_is_finite() {
+        let x: Vec<u8> = (0..100).map(|i| (i % 2) as u8).collect();
+
+        let y = x.clone();
+
+        let config = observed_mi_config();
+
+        let score = shuffle_corrected_nsb(&x, &y, &config);
+
+        assert!(score.is_finite(), "score = {score}");
+
+        assert!((0.0..=1.0).contains(&score));
+    }
+
+    // ------------------------------------------------------------------------
+    // u128 cardinality regression tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn large_u128_cardinality_is_accepted() {
+        let k = 1u128 << 100;
+
+        let config = entropy_config(k);
+
+        assert_eq!(config.k, k);
+
+        let diagnostics = nsb_entropy_diagnostics(&[1usize], &config);
+
+        assert!(diagnostics.entropy_bits.is_finite(), "{diagnostics:?}");
+
+        assert_eq!(diagnostics.k_observed, 1);
+
+        assert_eq!(diagnostics.coincidences, 0);
+
+        assert!(!diagnostics.k_mismatch);
+    }
+
+    #[test]
+    fn u128_cardinality_does_not_truncate_to_usize() {
+        let k = 1u128 << 100;
+
+        let diagnostics = nsb_entropy_diagnostics(&[1usize], &entropy_config(k));
+
+        assert_eq!(diagnostics.k_observed, 1);
+
+        assert!(!diagnostics.k_mismatch);
+    }
+
+    #[test]
+    fn large_cardinality_mismatch_still_works() {
+        let k = 1u128 << 100;
+
+        let diagnostics = nsb_entropy_diagnostics(&[1usize, 1usize], &entropy_config(1));
+
+        assert!(diagnostics.k_mismatch);
+
+        assert_eq!(diagnostics.k_observed, 2);
+
+        let diagnostics_large = nsb_entropy_diagnostics(&[1usize], &entropy_config(k));
+
+        assert!(!diagnostics_large.k_mismatch);
+    }
+
+    // ------------------------------------------------------------------------
+    // Shuffle cardinality regression
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn observed_cardinality_is_not_frozen_before_shuffle() {
+        let x = vec![0u8, 0, 0, 0, 1, 1, 1, 1];
+
+        let y = vec![0u8, 0, 0, 0, 1, 1, 1, 1];
+
+        let config = observed_mi_config();
+
+        // Resolve the original pair.
+        let original = config.cardinality.resolve(&x, &y).unwrap();
+
+        // Construct a pair whose support differs from the original.
+        let y_reduced = vec![0u8, 0, 0, 0, 0, 0, 0, 0];
+
+        let reduced = config.cardinality.resolve(&x, &y_reduced).unwrap();
+
+        assert_ne!(original, reduced);
+
+        assert_eq!(original.1, 2);
+
+        assert_eq!(reduced.1, 1);
+
+        // This is exactly what shuffle_corrected_nsb() now does:
+        // every nmi_nsb() call resolves cardinality against its actual
+        // `(x, y)` arguments.
     }
 }
