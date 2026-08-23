@@ -38,6 +38,16 @@ pub enum Estimator {
     /// Nemenman-Shafee-Bialek
     NSB,
 }
+impl Estimator {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Plugin => "Plugin",
+            Self::MM => "MM",
+            Self::QE => "QE",
+            Self::NSB => "NSB",
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MetricConfig {

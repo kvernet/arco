@@ -69,6 +69,15 @@ pub enum NsbCardinality {
 }
 
 impl NsbCardinality {
+    /// Cardinality name
+    pub fn name(&self) -> String {
+        match self {
+            Self::Observed => "Observed".to_string(),
+            Self::Explicit { k_x, k_y, k_xy } => {
+                format!("Explicit (k_x={}, k_y={}, k_xy={})", k_x, k_y, k_xy)
+            }
+        }
+    }
     /// Resolve the cardinalities for the supplied observations.
     ///
     /// This function is deliberately called from `nmi_nsb()` rather than

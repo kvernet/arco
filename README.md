@@ -51,12 +51,6 @@ Requires Rust 1.85+.
 - [API documentation](https://docs.rs/arco) — rustdoc
 - [Examples](https://github.com/kvernet/arco/tree/main/examples) — runnable usage examples
 
-## Reproducibility
-
-```bash
-./scripts/sweep.sh                    # Run 10-seed sweep, save JSON
-python3 scripts/analyze.py sweep_data # Analyze and generate plots
-```
 
 ## Python Reference
 

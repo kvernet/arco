@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Run a 10-seed sweep across all estimators for both substrates.
+# Run a seed sweep across all estimators for both substrates.
 # Usage: ./scripts/sweep.sh
 
-SEEDS=(7 42 123 1337 2026 31415 65537 8675309 123456789 2147483647)
+# Includes edge cases, small values, patterned values, and large 32-bit values.
+SEEDS=(0 1 7 42 69 123 256 512 999 1024 1337 2024 4096 8192 12345 54321 65535 65536 100000 123456 271828 314159 424242 999999 1000000 8675309 2147483647 2147483648 3735928559 4294967295)
 ESTIMATORS=("plugin" "mm" "qe" "nsb")
 DATA_DIR="sweep_data"
 mkdir -p "$DATA_DIR"

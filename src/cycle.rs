@@ -167,6 +167,13 @@ pub fn run_cycle<U: InformationUniverse>(
     record
         .config
         .insert("seed".to_string(), config.seed.to_string());
+    record
+        .config
+        .insert("estimator".to_string(), config.estimator.name().to_string());
+    record.config.insert(
+        "cardinality".to_string(),
+        config.cardinality.name().to_string(),
+    );
 
     let mut rng = StdRng::seed_from_u64(config.seed);
     let state_space = universe.state_space();
@@ -238,7 +245,8 @@ pub fn run_cycle<U: InformationUniverse>(
         .zip(train_subsets.par_iter())
         .enumerate()
         .for_each(|(i, (result, (rules, ratio)))| {
-            let mut local_rng = StdRng::seed_from_u64(config.seed + i as u64 * 137);
+            let local_seed = config.seed + i as u64 * 137;
+            let mut local_rng = StdRng::seed_from_u64(local_seed);
 
             let n_pool = state_space.len();
             let n_ens = config.n_ensemble.min(n_pool);
@@ -259,7 +267,7 @@ pub fn run_cycle<U: InformationUniverse>(
                 observer,
                 schedule,
                 config.steps,
-                config.seed + i as u64 * 137,
+                local_seed,
             );
 
             *result = UniverseResult {
@@ -286,7 +294,8 @@ pub fn run_cycle<U: InformationUniverse>(
         .zip(test_subsets.par_iter())
         .enumerate()
         .for_each(|(i, (ensemble_out, (rules, _ratio)))| {
-            let mut local_rng = StdRng::seed_from_u64(config.seed + 10000 + i as u64 * 137);
+            let local_seed = config.seed + 10000 + i as u64 * 137;
+            let mut local_rng = StdRng::seed_from_u64(local_seed);
 
             let n_pool = state_space.len();
             let n_ens = config.n_ensemble.min(n_pool);
@@ -307,7 +316,7 @@ pub fn run_cycle<U: InformationUniverse>(
                 observer,
                 schedule,
                 config.steps,
-                config.seed + 10000 + i as u64 * 137,
+                local_seed,
             );
         });
 
@@ -493,7 +502,7 @@ fn hypothesis_classification_metrics<U: InformationUniverse>(
     };
 
     // Update hypothesis
-    hypothesis.accuracy = accuracy;
+    hypothesis.accuracy = balanced_accuracy;
     let score = hypothesis.accuracy - 0.1 * hypothesis.complexity;
     hypothesis.score = score;
 

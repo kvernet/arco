@@ -32,6 +32,7 @@ pub mod cycle;
 pub mod hypotheses;
 pub mod metrics;
 pub mod observation;
+pub mod prelude;
 pub mod record;
 pub mod rules;
 pub mod schedule;
