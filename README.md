@@ -38,7 +38,7 @@ cargo run --release --features serialize -- graph --output results.json
 
 ```toml
 [dependencies]
-arco = "0.5"
+arco = "0.6"
 ```
 
 Requires Rust 1.85+.
