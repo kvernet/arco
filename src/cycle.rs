@@ -71,6 +71,14 @@ pub struct CycleConfig {
     pub n_shuffles: usize,
     /// Number of null universes for calibration.
     pub n_null_universes: usize,
+    /// Percentile value.
+    pub percentile: f64,
+    /// Minimum threshold for persistence.
+    pub floor_persistence: f64,
+    /// Minimum threshold for storage.
+    pub floor_storage: f64,
+    /// Minimum threshold for memory.
+    pub floor_memory: f64,
     /// Random seed for reproducibility.
     pub seed: u64,
     /// The MI estimator
@@ -89,6 +97,10 @@ impl Default for CycleConfig {
             max_delta: 15,
             n_shuffles: 10,
             n_null_universes: 30,
+            percentile: 95.0,
+            floor_persistence: 0.01,
+            floor_storage: 0.01,
+            floor_memory: 0.01,
             seed: 42,
             estimator: Estimator::Plugin,
             cardinality: NsbCardinality::Observed,
@@ -170,10 +182,12 @@ pub fn run_cycle<U: InformationUniverse>(
     record
         .config
         .insert("estimator".to_string(), config.estimator.name().to_string());
-    record.config.insert(
-        "cardinality".to_string(),
-        config.cardinality.name().to_string(),
-    );
+    if matches!(config.estimator, Estimator::NSB) {
+        record.config.insert(
+            "cardinality".to_string(),
+            config.cardinality.name().to_string(),
+        );
+    }
 
     let mut rng = StdRng::seed_from_u64(config.seed);
     let state_space = universe.state_space();
@@ -205,7 +219,10 @@ pub fn run_cycle<U: InformationUniverse>(
     };
     let ca_config = CalibrationConfig {
         metric: met_config,
-        ..CalibrationConfig::default()
+        percentile: config.percentile,
+        floor_persistence: config.floor_persistence,
+        floor_storage: config.floor_storage,
+        floor_memory: config.floor_memory,
     };
     let calibration = calibrate(
         universe,

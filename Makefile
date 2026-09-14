@@ -15,5 +15,5 @@ fix:
 	cargo fmt --all
 
 ci-act:
-	act -P ubuntu-latest=catthehacker/ubuntu:full-latest \
-		--artifact-server-path /tmp/act-artifacts
+	act -P ubuntu-latest=catthehacker/ubuntu:act-latest \
+		--artifact-server-path /tmp/act-artifacts && docker system prune -f

@@ -39,6 +39,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 /// Configuration for threshold calibration.
+#[derive(Debug)]
 pub struct CalibrationConfig {
     pub metric: MetricConfig,
     pub percentile: f64,
