@@ -34,6 +34,7 @@ pub mod metrics;
 pub mod observation;
 pub mod prelude;
 pub mod record;
+pub mod resources;
 pub mod rules;
 pub mod schedule;
 pub mod state;

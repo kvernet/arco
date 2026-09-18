@@ -16,4 +16,4 @@ fix:
 
 ci-act:
 	act -P ubuntu-latest=catthehacker/ubuntu:act-latest \
-		--artifact-server-path /tmp/act-artifacts && docker system prune -f
+		--artifact-server-path /tmp/act-artifacts

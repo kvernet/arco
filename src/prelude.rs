@@ -15,6 +15,7 @@ pub use crate::{
     cycle::{CycleConfig, run_cycle},
     hypotheses::Hypothesis,
     observation::Observation,
+    resources::{ResourceUsage, Resources, UnitResources},
     rules::{NoContext, Rule},
     schedule::Schedule,
     state::State,
