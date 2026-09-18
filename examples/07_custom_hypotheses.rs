@@ -297,9 +297,9 @@ fn main() {
     for h in &record.hypotheses {
         let diagnosis = if !h.survives && h.complexity >= 3.0 {
             "Overfit — complexity penalty too high"
-        } else if !h.survives && h.accuracy < 0.5 {
+        } else if !h.survives && h.classification_metrics.balanced_accuracy < 0.5 {
             "Condition doesn't predict storage"
-        } else if !h.survives && h.score <= 0.0 {
+        } else if !h.survives && h.classification_metrics.score <= 0.0 {
             "Accuracy too low for this complexity"
         } else if h.survives && h.complexity <= 1.0 {
             "Simple condition, good accuracy"
@@ -312,8 +312,8 @@ fn main() {
         println!(
             "{:<22} {:5.1} %      {:<8.3} {:<10} {}",
             h.name,
-            h.accuracy * 100.0,
-            h.score,
+            h.classification_metrics.balanced_accuracy * 100.0,
+            h.classification_metrics.score,
             if h.survives { "✓ YES" } else { "✗ NO" },
             diagnosis,
         );

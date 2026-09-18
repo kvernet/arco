@@ -255,7 +255,11 @@ fn main() {
     for h in &record.hypotheses {
         println!(
             "  {}: {} (acc={:.3}, score={:.3}, survives={})",
-            h.name, h.condition_desc, h.accuracy, h.score, h.survives
+            h.name,
+            h.condition_desc,
+            h.classification_metrics.balanced_accuracy,
+            h.classification_metrics.score,
+            h.survives
         );
     }
 

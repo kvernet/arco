@@ -25,7 +25,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! arco = { version = "0.5", features = ["serialize"] }
+//! arco = { version = "0.6", features = ["serialize"] }
 //! ```
 
 use crate::hypotheses::Hypothesis;
@@ -102,10 +102,6 @@ pub struct HypothesisRecord {
     pub complexity: f64,
     /// Hypothesis classification metrics.
     pub classification_metrics: ClassificationMetrics,
-    /// Fraction of test universes where the prediction held.
-    pub accuracy: f64,
-    /// Accuracy minus complexity penalty.
-    pub score: f64,
     /// Whether the hypothesis survived.
     pub survives: bool,
 }
@@ -117,9 +113,7 @@ impl<R> From<&Hypothesis<R>> for HypothesisRecord {
             condition_desc: h.condition_desc.clone(),
             property_name: h.property_name.clone(),
             complexity: h.complexity,
-            classification_metrics: ClassificationMetrics::default(),
-            accuracy: h.accuracy,
-            score: h.score,
+            classification_metrics: h.classification_metrics,
             survives: h.survives(),
         }
     }
@@ -192,11 +186,7 @@ impl<U: InformationUniverse> ResearchRecord<U> {
 
     /// Number of universes above the persistence threshold.
     pub fn n_persistent(&self) -> usize {
-        let threshold = self
-            .thresholds
-            .get("persistence")
-            .copied()
-            .unwrap_or(f64::MAX);
+        let threshold = self.threshold("persistence");
         self.results
             .iter()
             .filter(|r| r.persistence > threshold)
@@ -205,7 +195,7 @@ impl<U: InformationUniverse> ResearchRecord<U> {
 
     /// Number of universes above the storage threshold.
     pub fn n_storage(&self) -> usize {
-        let threshold = self.thresholds.get("storage").copied().unwrap_or(f64::MAX);
+        let threshold = self.threshold("storage");
         self.results
             .iter()
             .filter(|r| r.storage > threshold)
@@ -214,8 +204,28 @@ impl<U: InformationUniverse> ResearchRecord<U> {
 
     /// Number of universes above the memory threshold.
     pub fn n_memory(&self) -> usize {
-        let threshold = self.thresholds.get("memory").copied().unwrap_or(f64::MAX);
+        let threshold = self.threshold("memory");
         self.results.iter().filter(|r| r.memory > threshold).count()
+    }
+
+    /// Get the threshold.
+    pub fn threshold(&self, name: &str) -> f64 {
+        self.thresholds.get(name).copied().unwrap_or(f64::MAX)
+    }
+
+    /// Compute the persistence.
+    pub fn persistence(&self) -> f64 {
+        100.0 * self.n_persistent() as f64 / self.results.len() as f64
+    }
+
+    /// Compute the storage.
+    pub fn storage(&self) -> f64 {
+        100.0 * self.n_storage() as f64 / self.results.len() as f64
+    }
+
+    /// Compute the memory.
+    pub fn memory(&self) -> f64 {
+        100.0 * self.n_memory() as f64 / self.results.len() as f64
     }
 
     /// Human-readable summary of the cycle results.
@@ -226,18 +236,34 @@ impl<U: InformationUniverse> ResearchRecord<U> {
         lines.push(format!("Universes: {}", self.results.len()));
         lines.push(format!("Duration:  {:.1}s", self.elapsed_seconds));
         lines.push(String::new());
+        lines.push("Calibrated thresholds:".to_string());
+        lines.push(format!(
+            "  Persistence: {:.3}",
+            self.threshold("persistence")
+        ));
+        lines.push(format!("  Storage: {:.3}", self.threshold("storage")));
+        lines.push(format!("  Memory: {:.3}", self.threshold("memory")));
+
+        lines.push(String::new());
         lines.push("Emergence (above calibrated thresholds):".to_string());
+        let n = self.results.len();
+        lines.push(format!(
+            "  Persistence:  {}/{} ({:.1}%)",
+            self.n_persistent(),
+            n,
+            self.persistence(),
+        ));
         lines.push(format!(
             "  Storage: {}/{} ({:.1}%)",
             self.n_storage(),
-            self.results.len(),
-            100.0 * self.n_storage() as f64 / self.results.len() as f64,
+            n,
+            self.storage(),
         ));
         lines.push(format!(
             "  Memory:  {}/{} ({:.1}%)",
             self.n_memory(),
-            self.results.len(),
-            100.0 * self.n_memory() as f64 / self.results.len() as f64,
+            n,
+            self.memory(),
         ));
         lines.push(String::new());
         lines.push(format!("Hypotheses tested: {}", self.hypotheses.len()));
@@ -250,8 +276,12 @@ impl<U: InformationUniverse> ResearchRecord<U> {
             lines.push("Surviving hypotheses:".to_string());
             for h in surviving {
                 lines.push(format!(
-                    "  {}: {} (acc={:.3}, score={:.3})",
-                    h.name, h.condition_desc, h.accuracy, h.score,
+                    "  {}: {} (balanced_acc={:.3}, acc={:.3}, score={:.3})",
+                    h.name,
+                    h.condition_desc,
+                    h.classification_metrics.balanced_accuracy,
+                    h.classification_metrics.accuracy,
+                    h.classification_metrics.score,
                 ));
             }
         }

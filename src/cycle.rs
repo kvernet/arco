@@ -337,7 +337,6 @@ pub fn run_cycle<U: InformationUniverse>(
             );
         });
 
-    let mut classes = Vec::with_capacity(hypotheses.len());
     for h in hypotheses.iter_mut() {
         let threshold = record
             .thresholds
@@ -345,25 +344,17 @@ pub fn run_cycle<U: InformationUniverse>(
             .copied()
             .unwrap_or(0.0);
 
-        let class = hypothesis_classification_metrics::<U>(
+        // Update the hypothesis classification metrics.
+        h.classification_metrics = hypothesis_classification_metrics::<U>(
             h,
             &test_subsets,
             &test_ensembles,
             threshold,
             &ca_config.metric,
         );
-        classes.push(class);
     }
 
-    record.hypotheses = hypotheses
-        .iter()
-        .zip(classes.iter())
-        .map(|(h, c)| {
-            let mut r = HypothesisRecord::from(h);
-            r.classification_metrics = *c;
-            r
-        })
-        .collect();
+    record.hypotheses = hypotheses.iter().map(HypothesisRecord::from).collect();
 
     // ================================================================
     // STEP 5: BOOLEAN VERIFICATION (OPTIONAL)
@@ -449,7 +440,7 @@ pub fn run_cycle<U: InformationUniverse>(
 ///
 /// If a metric has a zero denominator, its value is returned as `0.0`.
 fn hypothesis_classification_metrics<U: InformationUniverse>(
-    hypothesis: &mut Hypothesis<U::Rule>,
+    hypothesis: &Hypothesis<U::Rule>,
     test_subsets: &[(Vec<U::Rule>, f64)],
     test_ensembles: &TestEnsembles<U>,
     threshold: f64,
@@ -518,10 +509,8 @@ fn hypothesis_classification_metrics<U: InformationUniverse>(
         0.0
     };
 
-    // Update hypothesis
-    hypothesis.accuracy = balanced_accuracy;
-    let score = hypothesis.accuracy - 0.1 * hypothesis.complexity;
-    hypothesis.score = score;
+    // Compute the score.
+    let score = balanced_accuracy - 0.1 * hypothesis.complexity;
 
     ClassificationMetrics {
         accuracy,
