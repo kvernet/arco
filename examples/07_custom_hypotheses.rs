@@ -11,6 +11,7 @@
 use arco::cycle::{CycleConfig, run_cycle};
 use arco::hypotheses::Hypothesis;
 use arco::observation::Observation;
+use arco::resources::UnitResources;
 use arco::rules::{NoContext, Rule};
 use arco::schedule::Schedule;
 use arco::state::State;
@@ -159,6 +160,7 @@ impl InformationUniverse for CounterUniverse {
     type State = Counter;
     type Rule = CounterRule;
     type Observation = FullObserver;
+    type Resources = UnitResources;
     type Schedule = AllRulesSchedule;
     fn state_space(&self) -> &[Self::State] {
         &self.states
@@ -186,6 +188,15 @@ impl InformationUniverse for CounterUniverse {
     }
     fn null_rules(&self, _rng: &mut dyn Rng) -> Vec<Self::Rule> {
         vec![CounterRule::Reset]
+    }
+
+    fn invariants(&self) -> &[Box<dyn arco::prelude::Invariant<Self::State>>] {
+        &[]
+    }
+
+    fn resources(&self) -> &Self::Resources {
+        static RESOURCES: UnitResources = UnitResources;
+        &RESOURCES
     }
 }
 

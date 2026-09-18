@@ -4,6 +4,7 @@ use std::cell::Cell;
 
 use rand::{Rng, RngExt};
 
+use crate::invariants::Invariant;
 use crate::rules::Rule;
 use crate::substrates::graph::observation::GraphObserver;
 use crate::substrates::graph::rules::{
@@ -11,6 +12,7 @@ use crate::substrates::graph::rules::{
 };
 use crate::substrates::graph::schedule::AllVerticesSchedule;
 use crate::substrates::graph::state::BinaryGraphState;
+use crate::substrates::graph::{GraphResources, generate_standard_invariants};
 use crate::universe::InformationUniverse;
 
 // ===================================================================
@@ -18,16 +20,37 @@ use crate::universe::InformationUniverse;
 // ===================================================================
 
 /// The Binary Graph Universe — ARCO's validation substrate.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BinaryGraphUniverse {
     state_space: Vec<BinaryGraphState>,
-    observer: GraphObserver,
-    schedule: AllVerticesSchedule,
     n_vertices: usize,
     destructive_pool: Vec<RewriteRule>,
     // Pre-generated rule subsets for reproducible spectrum experiments
     subsets: Vec<(Vec<RewriteRule>, f64)>,
     subset_index: Cell<usize>,
+    observer: GraphObserver,
+    resources: GraphResources,
+    invariants: Vec<Box<dyn Invariant<BinaryGraphState>>>,
+    schedule: AllVerticesSchedule,
+}
+
+impl Clone for BinaryGraphUniverse {
+    fn clone(&self) -> Self {
+        Self {
+            state_space: self.state_space.clone(),
+            n_vertices: self.n_vertices,
+            destructive_pool: self.destructive_pool.clone(),
+            subsets: self.subsets.clone(),
+            subset_index: Cell::new(self.subset_index.get()),
+            observer: self.observer.clone(),
+            resources: self.resources,
+            // Box<dyn Invariant<_>> is not Clone (trait objects can't
+            // derive Clone generically); the standard invariant set is
+            // stateless, so it's cheap to regenerate.
+            invariants: generate_standard_invariants(),
+            schedule: self.schedule.clone(),
+        }
+    }
 }
 
 impl BinaryGraphUniverse {
@@ -58,12 +81,14 @@ impl BinaryGraphUniverse {
 
         Self {
             state_space,
-            observer: GraphObserver::from_name(obs_name),
-            schedule: AllVerticesSchedule::new(),
             n_vertices,
             destructive_pool,
             subsets,
             subset_index: std::cell::Cell::new(0),
+            observer: GraphObserver::from_name(obs_name),
+            resources: GraphResources,
+            invariants: generate_standard_invariants(),
+            schedule: AllVerticesSchedule::new(),
         }
     }
 
@@ -80,6 +105,7 @@ impl InformationUniverse for BinaryGraphUniverse {
     type State = BinaryGraphState;
     type Rule = RewriteRule;
     type Observation = GraphObserver;
+    type Resources = GraphResources;
     type Schedule = AllVerticesSchedule;
 
     fn state_space(&self) -> &[Self::State] {
@@ -88,6 +114,14 @@ impl InformationUniverse for BinaryGraphUniverse {
 
     fn observation(&self) -> &Self::Observation {
         &self.observer
+    }
+
+    fn resources(&self) -> &Self::Resources {
+        &self.resources
+    }
+
+    fn invariants(&self) -> &[Box<dyn Invariant<Self::State>>] {
+        &self.invariants
     }
 
     fn schedule(&self) -> &Self::Schedule {

@@ -1,4 +1,4 @@
-//! Resources trait — resource constraints on Information Universes.
+//! Resources trait — resource constraints on information universes.
 //!
 //! Per the Mathematical Constitution:
 //!     R specifies required resources: Time (transformation steps),
@@ -180,6 +180,7 @@ pub fn satisfies_resource_algebra(
 /// bookkeeping over a specific run, not a law about the
 /// transformation semigroup.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct ResourceUsage {
     /// Number of transformation steps taken (Constitution:
     /// "transformation steps"). One unit per call to

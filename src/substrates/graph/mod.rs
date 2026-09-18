@@ -19,6 +19,12 @@
 //! - **Schedule**: [`AllVerticesSchedule`] — asynchronous
 //!   exhaustive update: every vertex visited once per timestep
 //!   in random order, first matching rule fires.
+//! - **Resources**: [`GraphResources`] — space is the canonical
+//!   encoding size, time is uniform per application, and locality is
+//!   [`RewriteRule::locality_radius`].
+//! - **Invariants**: [`EdgeCountInvariant`] (exactly conserved — no
+//!   shipped rule mutates the adjacency matrix) and
+//!   [`LabelSumInvariant`] (a contrast case most rules violate).
 //! - **Universe**: [`BinaryGraphUniverse`] — bundles all components
 //!   and implements [`InformationUniverse`].
 //! - **Hypotheses**: Standard hypothesis set including the
@@ -46,7 +52,9 @@
 //! ```
 
 pub mod hypotheses;
+pub mod invariants;
 pub mod observation;
+pub mod resources;
 pub mod rules;
 pub mod schedule;
 pub mod state;
@@ -55,7 +63,9 @@ pub mod validation;
 
 // Re-export commonly used types
 pub use hypotheses::generate_standard_hypotheses;
+pub use invariants::{EdgeCountInvariant, LabelSumInvariant, generate_standard_invariants};
 pub use observation::observe_compound;
+pub use resources::GraphResources;
 pub use rules::{MatchInfo, RewriteRule, create_destructive_rules, create_structured_rules};
 pub use schedule::AllVerticesSchedule;
 pub use state::BinaryGraphState;

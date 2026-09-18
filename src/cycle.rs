@@ -26,6 +26,7 @@
 //! println!("{}", record.summary());
 //! ```
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use rand::RngExt;
@@ -39,9 +40,12 @@ use rayon::iter::ParallelIterator;
 use crate::calibration::CalibrationConfig;
 use crate::calibration::{calibrate, generate_trajectories};
 use crate::hypotheses::{Hypothesis, surviving_hypotheses};
+use crate::invariants::measure_trajectory_violation_rates;
 use crate::metrics::NsbCardinality;
 use crate::metrics::{Estimator, MetricConfig, memory, persistence, storage};
 use crate::record::{ClassificationMetrics, HypothesisRecord, ResearchRecord, UniverseResult};
+use crate::resources::ResourceUsage;
+use crate::resources::measure_resource_usage;
 use crate::rules::Rule;
 use crate::types::BooleanTester;
 use crate::types::TestEnsembles;
@@ -191,8 +195,10 @@ pub fn run_cycle<U: InformationUniverse>(
 
     let mut rng = StdRng::seed_from_u64(config.seed);
     let state_space = universe.state_space();
-    let schedule = universe.schedule();
     let observer = universe.observation();
+    let resources = universe.resources();
+    let invariants = universe.invariants();
+    let schedule = universe.schedule();
 
     // ================================================================
     // STEP 1: GENERATE
@@ -254,6 +260,8 @@ pub fn run_cycle<U: InformationUniverse>(
             persistence: 0.0,
             storage: 0.0,
             memory: 0.0,
+            resource_usage: ResourceUsage::ZERO,
+            invariant_violation_rate: HashMap::new(),
         })
         .collect();
 
@@ -287,6 +295,38 @@ pub fn run_cycle<U: InformationUniverse>(
                 local_seed,
             );
 
+            // Resource (R) and invariant (I) accounting use one
+            // representative trajectory (the first initial state)
+            // rather than the full ensemble, keeping the added cost
+            // to roughly a single extra trajectory per universe.
+            let resource_usage = initial_states
+                .first()
+                .map(|initial| {
+                    measure_resource_usage(
+                        std::slice::from_ref(initial),
+                        rules,
+                        resources,
+                        schedule,
+                        config.steps,
+                    )
+                    .remove(0)
+                })
+                .unwrap_or(ResourceUsage::ZERO);
+
+            let invariant_violation_rate = initial_states
+                .first()
+                .map(|initial| {
+                    measure_trajectory_violation_rates(
+                        initial,
+                        rules,
+                        invariants,
+                        schedule,
+                        config.steps,
+                        local_seed,
+                    )
+                })
+                .unwrap_or_default();
+
             *result = UniverseResult {
                 universe_id: i,
                 structured_ratio: *ratio,
@@ -295,6 +335,8 @@ pub fn run_cycle<U: InformationUniverse>(
                 persistence: persistence(&ensemble, 1, &ca_config.metric),
                 storage: storage(&ensemble, &ca_config.metric),
                 memory: memory(&ensemble, &ca_config.metric),
+                resource_usage,
+                invariant_violation_rate,
             };
         });
 

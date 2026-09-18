@@ -29,6 +29,7 @@
 //! ```
 
 use crate::hypotheses::Hypothesis;
+use crate::resources::ResourceUsage;
 use crate::universe::InformationUniverse;
 use std::collections::HashMap;
 
@@ -86,6 +87,13 @@ pub struct UniverseResult {
     pub storage: f64,
     /// Memory score.
     pub memory: f64,
+    /// Resource usage (`R`) for a representative trajectory of this
+    /// universe. See [`crate::resources`].
+    pub resource_usage: ResourceUsage,
+    /// Fraction of trajectory steps at which each invariant (`I`) was
+    /// violated, keyed by invariant name. Empty if the universe
+    /// claims no invariants. See [`crate::invariants`].
+    pub invariant_violation_rate: HashMap<String, f64>,
 }
 
 /// Serialized hypothesis record for the research output.
@@ -265,6 +273,48 @@ impl<U: InformationUniverse> ResearchRecord<U> {
             n,
             self.memory(),
         ));
+
+        if !self.results.is_empty() {
+            let n = self.results.len() as f64;
+            let mean_peak_space: f64 = self
+                .results
+                .iter()
+                .map(|r| r.resource_usage.peak_space)
+                .sum::<f64>()
+                / n;
+            let mean_max_locality: f64 = self
+                .results
+                .iter()
+                .map(|r| r.resource_usage.max_locality)
+                .sum::<f64>()
+                / n;
+            lines.push(String::new());
+            lines.push("Resources (mean over universes):".to_string());
+            lines.push(format!("  Peak space:    {mean_peak_space:.3}"));
+            lines.push(format!("  Max locality:  {mean_max_locality:.3}"));
+
+            let mut invariant_names: Vec<&String> = self
+                .results
+                .iter()
+                .flat_map(|r| r.invariant_violation_rate.keys())
+                .collect();
+            invariant_names.sort();
+            invariant_names.dedup();
+            if !invariant_names.is_empty() {
+                lines.push(String::new());
+                lines.push("Invariants (mean violation rate over universes):".to_string());
+                for name in invariant_names {
+                    let mean_rate: f64 = self
+                        .results
+                        .iter()
+                        .filter_map(|r| r.invariant_violation_rate.get(name))
+                        .sum::<f64>()
+                        / n;
+                    lines.push(format!("  {name}: {mean_rate:.3}"));
+                }
+            }
+        }
+
         lines.push(String::new());
         lines.push(format!("Hypotheses tested: {}", self.hypotheses.len()));
         let surviving: Vec<&HypothesisRecord> =

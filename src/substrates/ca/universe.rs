@@ -11,10 +11,12 @@
 
 use rand::{Rng, RngExt};
 
+use crate::invariants::Invariant;
 use crate::substrates::ca::observation::CAObserver;
 use crate::substrates::ca::rules::CARule;
 use crate::substrates::ca::schedule::SynchronousCASchedule;
 use crate::substrates::ca::state::CAState;
+use crate::substrates::ca::{CAResources, generate_ca_invariants};
 use crate::universe::InformationUniverse;
 
 // ===================================================================
@@ -46,13 +48,31 @@ use crate::universe::InformationUniverse;
 /// let record = run_cycle(&universe, &config, &mut hypotheses, None);
 /// ```
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CAUniverse<const N: usize, const R: usize = 1> {
     state_space: Vec<CAState<N, R>>,
     /// Pre-generated rule sets for reproducible experiments
     rules: Vec<CARule<N, R>>,
     observer: CAObserver,
+    resources: CAResources,
+    invariants: Vec<Box<dyn Invariant<CAState<N, R>>>>,
     schedule: SynchronousCASchedule,
+}
+
+impl<const N: usize, const R: usize> Clone for CAUniverse<N, R> {
+    fn clone(&self) -> Self {
+        Self {
+            state_space: self.state_space.clone(),
+            rules: self.rules.clone(),
+            observer: self.observer.clone(),
+            resources: self.resources,
+            // Box<dyn Invariant<_>> is not Clone (trait objects can't
+            // derive Clone generically); the standard invariant set is
+            // stateless, so it's cheap to regenerate.
+            invariants: generate_ca_invariants::<N, R>(),
+            schedule: self.schedule.clone(),
+        }
+    }
 }
 
 impl<const N: usize, const R: usize> CAUniverse<N, R> {
@@ -84,6 +104,8 @@ impl<const N: usize, const R: usize> CAUniverse<N, R> {
             state_space,
             rules,
             observer: CAObserver::from_name(obs_name),
+            resources: CAResources,
+            invariants: generate_ca_invariants(),
             schedule: SynchronousCASchedule::new(),
         }
     }
@@ -98,6 +120,7 @@ impl<const N: usize, const R: usize> InformationUniverse for CAUniverse<N, R> {
     type State = CAState<N, R>;
     type Rule = CARule<N, R>;
     type Observation = CAObserver;
+    type Resources = CAResources;
     type Schedule = SynchronousCASchedule;
 
     fn state_space(&self) -> &[Self::State] {
@@ -106,6 +129,14 @@ impl<const N: usize, const R: usize> InformationUniverse for CAUniverse<N, R> {
 
     fn observation(&self) -> &Self::Observation {
         &self.observer
+    }
+
+    fn resources(&self) -> &Self::Resources {
+        &self.resources
+    }
+
+    fn invariants(&self) -> &[Box<dyn crate::prelude::Invariant<Self::State>>] {
+        &self.invariants
     }
 
     fn schedule(&self) -> &Self::Schedule {

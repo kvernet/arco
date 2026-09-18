@@ -17,6 +17,12 @@
 //! - **Observation**: Full state, density, and parity observers.
 //! - **Schedule**: [`SynchronousCASchedule`] — all cells update
 //!   simultaneously.
+//! - **Resources**: [`CAResources`] — space is `N` cells, time is
+//!   uniform per update, locality is the neighborhood radius `R`.
+//! - **Invariants**: [`PopulationInvariant`] (conserved only by
+//!   number-conserving rules, e.g. Wolfram Rule 184) and
+//!   [`ParityInvariant`] (generalizes the existing
+//!   `CARule::conserves_parity` check).
 //!
 //! # Usage
 //!
@@ -33,7 +39,9 @@
 //! ```
 
 pub mod hypotheses;
+pub mod invariants;
 pub mod observation;
+pub mod resources;
 pub mod rules;
 pub mod schedule;
 pub mod state;
@@ -41,7 +49,9 @@ pub mod universe;
 
 // Re-export commonly used types
 pub use hypotheses::generate_ca_hypotheses;
+pub use invariants::{ParityInvariant, PopulationInvariant, generate_ca_invariants};
 pub use observation::{CAObserver, DensityObserver, FullStateObserver, ParityObserver};
+pub use resources::CAResources;
 pub use rules::CARule;
 pub use schedule::SynchronousCASchedule;
 pub use state::CAState;

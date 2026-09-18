@@ -9,7 +9,9 @@
 
 use arco::cycle::{CycleConfig, run_cycle};
 use arco::hypotheses::Hypothesis;
+use arco::invariants::Invariant;
 use arco::observation::Observation;
+use arco::resources::Resources;
 use arco::rules::{NoContext, Rule};
 use arco::schedule::Schedule;
 use arco::state::State;
@@ -120,6 +122,64 @@ impl Observation<Counter> for FullObserver {
     }
 }
 
+// ===================================================================
+// Resources — R_time, R_space, R_local
+// ===================================================================
+
+/// Resource accounting for the Counter universe.
+///
+/// - Space: 2 bytes (`value` + `max_value`, matching the canonical
+///   encoding).
+/// - Time: 1.0 per rule application.
+/// - Locality: 0.0 — both rules use `NoContext` and act on the whole
+///   state at once, so there's no notion of a bounded interaction
+///   radius here.
+#[derive(Debug, Clone, Copy, Default)]
+struct CounterResources;
+
+impl Resources<Counter, CounterRule> for CounterResources {
+    fn name(&self) -> &str {
+        "counter_resources"
+    }
+    fn space(&self, _state: &Counter) -> f64 {
+        2.0
+    }
+    fn time(&self, _rule: &CounterRule) -> f64 {
+        1.0
+    }
+    fn locality(&self, _rule: &CounterRule) -> f64 {
+        0.0
+    }
+}
+
+// ===================================================================
+// Invariants — I: S -> R
+// ===================================================================
+
+/// `I(s) = max_value`.
+///
+/// Genuinely conserved here: `IncrementRule::apply` wraps back to 0
+/// at `max_value` but never changes `max_value` itself, and
+/// `ResetRule::apply` only zeroes `value`. Neither rule can violate
+/// this invariant, which is exactly the property `is_conserved` (via
+/// [`Invariant`]'s default tolerance-based check) is for.
+#[derive(Debug, Clone, Copy, Default)]
+struct MaxValueInvariant;
+
+impl Invariant<Counter> for MaxValueInvariant {
+    fn name(&self) -> &str {
+        "max_value"
+    }
+    fn evaluate(&self, state: &Counter) -> f64 {
+        state.max_value as f64
+    }
+}
+
+/// The standard invariant set for the Counter universe.
+fn standard_counter_invariants() -> Vec<Box<dyn Invariant<Counter>>> {
+    vec![Box::new(MaxValueInvariant)]
+}
+
 #[derive(Debug, Clone, Default)]
 struct AllRulesSchedule;
 impl Schedule<Counter, CounterRule> for AllRulesSchedule {
@@ -142,9 +202,21 @@ impl Schedule<Counter, CounterRule> for AllRulesSchedule {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct CounterUniverse {
     states: Vec<Counter>,
+    invariants: Vec<Box<dyn Invariant<Counter>>>,
+}
+
+impl Clone for CounterUniverse {
+    fn clone(&self) -> Self {
+        Self {
+            states: self.states.clone(),
+            // Box<dyn Invariant<_>> isn't Clone; the standard set is
+            // stateless, so it's cheap to regenerate.
+            invariants: standard_counter_invariants(),
+        }
+    }
 }
 
 impl CounterUniverse {
@@ -152,7 +224,10 @@ impl CounterUniverse {
         let states: Vec<Counter> = (0..100)
             .map(|_| Counter::new(rng.random_range(0..=5), 5))
             .collect();
-        Self { states }
+        Self {
+            states,
+            invariants: standard_counter_invariants(),
+        }
     }
 }
 
@@ -160,6 +235,7 @@ impl InformationUniverse for CounterUniverse {
     type State = Counter;
     type Rule = CounterRule;
     type Observation = FullObserver;
+    type Resources = CounterResources;
     type Schedule = AllRulesSchedule;
 
     fn state_space(&self) -> &[Self::State] {
@@ -169,6 +245,17 @@ impl InformationUniverse for CounterUniverse {
     fn observation(&self) -> &Self::Observation {
         static OBS: FullObserver = FullObserver;
         &OBS
+    }
+
+    fn resources(&self) -> &Self::Resources {
+        // Same reasoning as `observation()`: CounterResources has no
+        // state, so a static reference avoids a per-universe field.
+        static RESOURCES: CounterResources = CounterResources;
+        &RESOURCES
+    }
+
+    fn invariants(&self) -> &[Box<dyn Invariant<Self::State>>] {
+        &self.invariants
     }
 
     fn schedule(&self) -> &Self::Schedule {

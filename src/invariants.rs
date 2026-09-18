@@ -1,4 +1,4 @@
-//! Invariant trait — conserved quantities in Information Universes.
+//! Invariant trait — conserved quantities in information universes.
 //!
 //! Per the Mathematical Constitution:
 //!     I is a set of functions I: S → ℝ that are conserved (exactly
