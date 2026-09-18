@@ -30,6 +30,7 @@
 pub mod calibration;
 pub mod cycle;
 pub mod hypotheses;
+pub mod invariants;
 pub mod metrics;
 pub mod observation;
 pub mod prelude;
