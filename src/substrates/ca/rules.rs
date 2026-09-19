@@ -12,14 +12,9 @@
 
 use crate::rules::{NoContext, Rule};
 use crate::state::State;
-use crate::substrates::ca::state::CAState;
+use crate::substrates::ca::state::{CAState, neighborhood_size};
 use rand::{Rng, RngExt};
 use std::fmt;
-
-/// Number of cells in the neighborhood.
-const fn neighborhood_size<const R: usize>() -> usize {
-    2 * R + 1
-}
 
 /// Total number of possible states for N cells.
 const fn num_states<const N: usize>() -> usize {

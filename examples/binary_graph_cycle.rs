@@ -40,9 +40,10 @@ fn main() {
 
     let record = run_cycle(&universe, &config, &mut hypotheses, Some(&boolean_tester));
 
-    // Print storage spectrum
-    println!("\nStorage Spectrum:");
+    // Print storage & memory spectrum
+    println!("\nStorage & Memory Spectrum:");
     let storage_threshold = record.thresholds.get("storage").copied().unwrap_or(0.0);
+    let memory_threshold = record.thresholds.get("memory").copied().unwrap_or(0.0);
     let brackets: &[(&str, f64, f64)] = &[
         ("Noise", 0.00, 0.15),
         ("Noise-dominated", 0.15, 0.40),
@@ -51,8 +52,8 @@ fn main() {
         ("Structured", 0.85, 1.01),
     ];
     println!(
-        "  {:<20} {:<6} {:<8} {:<8}",
-        "Class", "n", "Stor%", "MeanStor"
+        "  {:<20} {:<6} {:<8} {:<10} {:<8} {:<8}",
+        "Class", "n", "Stor%", "MeanStor", "Mem%", "MeanMem"
     );
     for (label, low, high) in brackets {
         let group: Vec<_> = record
@@ -71,9 +72,12 @@ fn main() {
                 .count() as f64
             / n as f64;
         let mean_stor = group.iter().map(|r| r.storage).sum::<f64>() / n as f64;
+        let mem_pct =
+            100.0 * group.iter().filter(|r| r.memory > memory_threshold).count() as f64 / n as f64;
+        let mean_mem = group.iter().map(|r| r.memory).sum::<f64>() / n as f64;
         println!(
-            "  {:<20} {:<6} {:<8.1} {:<8.4}",
-            label, n, stor_pct, mean_stor
+            "  {:<20} {:<6} {:<8.1} {:<10.4} {:<8.1} {:<8.4}",
+            label, n, stor_pct, mean_stor, mem_pct, mean_mem
         );
     }
 

@@ -10,8 +10,9 @@ use crate::metrics::{MetricConfig, storage::corrected_nmi};
 /// # Limitations
 ///
 /// At Δ=1 with small ensembles (n ≤ 10), the per-timestep estimator
-/// rarely exceeds the shuffle baseline. Use [`storage`]
-/// (pooled estimation) as the primary emergence signal.
+/// rarely exceeds the shuffle baseline. Use [`storage`](crate::metrics::storage) or
+/// [`memory`](crate::metrics::memory) (pooled estimation, evaluated
+/// across the full Δ range) as the primary emergence signals.
 pub fn persistence<T: Eq + Hash + Clone>(
     trajectories: &[Vec<T>],
     delta: usize,

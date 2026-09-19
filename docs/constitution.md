@@ -193,11 +193,50 @@ An observation set $\mathcal{O}$ is **dynamically sufficient** for $\mathcal{T}$
 
 Resources are subadditive under composition: $R_i(\tau_1 \circ \tau_2) \le R_i(\tau_1) + R_i(\tau_2)$.
 
+### 1.5.3 Implementations
+
+Every Information Universe provides exactly one resource model realizing $R_{\text{time}}$, $R_{\text{space}}$, and $R_{\text{local}}$ for its own states and rules.
+
+| Universe | $R_{\text{space}}$ | $R_{\text{time}}$ | $R_{\text{local}}$ |
+|----------|---------------------|---------------------|----------------------|
+| Binary Graph | $n^2 + n$ (adjacency + labels) | $1$ per application | Rule's maximum graph distance |
+| Cellular Automaton | $N$ (cell count) | $1$ per synchronous update | $R$ (neighborhood radius) |
+
+The Resource Algebra (1.5.2) is checked directly rather than assumed: composing two rules must not manufacture cost the parts did not already require. In the Binary Graph Universe, composing two rules combines locality via $\max(R_{\text{local}}(\tau_1), R_{\text{local}}(\tau_2))$, which is a tighter bound that still satisfies subadditivity, since $\max(a,b) \le a+b$ for non-negative costs.
+
+A universe with no resource structure of its own may use the trivial model $R_{\text{time}} \equiv 1$, $R_{\text{space}} \equiv 0$, $R_{\text{local}} \equiv 0$ rather than leaving $\mathcal{R}$ unspecified — the tuple is not considered complete without an explicit resource model, even a trivial one.
+
 ---
 
 ## 1.6 The Invariant Structure $\mathcal{I}$
 
 $\mathcal{I}$ is a set of functions $I: \mathcal{S} \to \mathbb{R}$ that are conserved (exactly or approximately) under all $\tau \in \mathcal{T}$. All invariants must be computable in finite time.
+
+### 1.6.1 Conservation and Tolerance
+
+$I$ is conserved between states $s$ and $\tau(s)$ within tolerance $\epsilon \ge 0$ if $|I(s) - I(\tau(s))| \le \epsilon$. $\epsilon = 0$ is exact conservation. Approximate invariants ($\epsilon > 0$) are permitted but must state $\epsilon$ explicitly.
+
+### 1.6.2 Verification
+
+"Computable in finite time" (1.6) is discharged one of two ways:
+
+- **Exhaustive verification**: for a finite $\mathcal{S}$, evaluate conservation for every $s \in \mathcal{S}$ under a given $\tau$. Decisive, but only tractable for small state spaces.
+- **Trajectory violation rate**: for larger or infinite $\mathcal{S}$, evaluate conservation across the states visited along sampled trajectories and report the fraction of transitions at which it failed. Not decisive, but scales.
+
+### 1.6.3 Triviality (Failure Condition F-2)
+
+Not every conserved quantity is a discovery. If a rule set is constructed so that it structurally cannot touch some part of the state, conservation of a quantity depending only on that part is a restatement of how the rules were built, not new information — exactly the situation F-2 warns against. The Binary Graph Universe's edge-count invariant (1.6.4) is a worked example of this: it is exactly conserved only because no shipped rule ever mutates the adjacency matrix, which is a fact about the rule set's construction, not a discovery about computation. Triviality is a research judgment about *why* a quantity is conserved, not a property this document mechanizes; 1.6.2's verification procedures only establish *whether* it is conserved.
+
+### 1.6.4 Implementations
+
+| Universe | Invariant | Status |
+|----------|-----------|--------|
+| Binary Graph | Edge count | Exactly conserved by every shipped rule (trivial by construction — see 1.6.3) |
+| Binary Graph | Label sum | Not conserved by most structured rules — a contrast case, not a claim |
+| Cellular Automaton | Population count | Exactly conserved only by number-conserving rules (e.g. Wolfram Rule 184); violated by most others — genuinely rule-dependent |
+| Cellular Automaton | Population parity | Conserved iff the rule is parity-conserving; generalizes an exhaustive check the CA substrate already performed informally before $\mathcal{I}$ was implemented |
+
+A universe that claims no invariants provides the empty set rather than leaving $\mathcal{I}$ unspecified.
 
 ---
 
@@ -252,6 +291,8 @@ $$
 
 Step-to-step persistence ($\Delta=1$) is not included in the hierarchy. It is not reliably measurable with current ensemble sizes. Storage (maximum persistence across all $\Delta$) is the primary emergence signal.
 
+Storage and Memory (2.1, 2.2) are drawn as sequential levels below for continuity with earlier versions of this document, but they are calibrated independently and neither implies the other in general (2.2). Read the diagram as "in the order these conditions are typically checked," not as strict logical containment between those two levels specifically — every other adjacent pair in the hierarchy is a strengthening of the one below it.
+
 ---
 
 ## 2.1 Storage Universe
@@ -268,7 +309,20 @@ where storage is the maximum shuffle-corrected NMI across all timescales $\Delta
 
 ## 2.2 Memory Universe
 
-A universe exhibits **memory** if it exhibits storage. Memory is the capacity to preserve information about past observations such that it can be recovered later — measured via $I(O_t; O_{t+\Delta})$.
+A universe exhibits **memory** if:
+
+$$
+\text{Mem}(\mathcal{U}) > \theta_{\text{mem}}
+$$
+
+where memory is the *mean* shuffle-corrected NMI across all timescales $\Delta \in [1, \Delta_{\text{max}}]$ that had enough pooled samples to estimate, computed from the same pooled per-$\Delta$ profile as storage (2.1, 3.3) but averaged rather than maximized.
+
+Storage and Memory Universe are related but logically distinct classifications, not nested levels of the same condition. Since the mean of a profile never exceeds its max, $\text{Mem}(\mathcal{U}) \le \text{Store}(\mathcal{U})$ pointwise, always. But $\theta_{\text{stor}}$ and $\theta_{\text{mem}}$ are calibrated independently against their own null distributions (8.1), so satisfying one condition does not imply satisfying the other:
+
+- **Storage without memory**: information survives at one specific timescale and nowhere else — a sharp resonance, not durable retention.
+- **Storage and memory together**: information persists broadly and roughly equally across timescales.
+
+Memory is the capacity to preserve information about past observations such that it can be recovered later, evaluated as an *average* over how far back that recovery still works, rather than the *best case* storage reports.
 
 ---
 
@@ -294,7 +348,20 @@ where $Y_{\text{shuf}}$ is $Y$ with temporal order randomly permuted. The expect
 
 ---
 
-## 3.3 Storage
+## 3.3 Persistence
+
+$$
+\boxed{\text{Persist}(\mathcal{U}, \Delta) = \frac{1}{T-\Delta} \sum_{t=0}^{T-\Delta-1} \text{NMI}_{\text{corr}}\left(
+\{o(s_t^{(i)})\}_{i=1}^n,
+\{o(s_{t+\Delta}^{(i)})\}_{i=1}^n
+\right)}
+$$
+
+Per-timestep persistence at $\Delta=1$ with small ensembles rarely exceeds the shuffle baseline. Use storage or memory instead — both use pooled estimation across the full $\Delta$ range.
+
+---
+
+## 3.4 Storage
 
 $$
 \boxed{\text{Store}(\mathcal{U}) = \max_{\Delta \in [1, \Delta_{\text{max}}]} \text{NMI}_{\text{corr}}\left(
@@ -307,22 +374,18 @@ Storage uses **pooled estimation**: all observation pairs from all ensemble memb
 
 ---
 
-## 3.4 Persistence
+## 3.5 Memory
 
 $$
-\boxed{\text{Persist}(\mathcal{U}, \Delta) = \frac{1}{T-\Delta} \sum_{t=0}^{T-\Delta-1} \text{NMI}_{\text{corr}}\left(
-\{o(s_t^{(i)})\}_{i=1}^n,
-\{o(s_{t+\Delta}^{(i)})\}_{i=1}^n
+\boxed{\text{Mem}(\mathcal{U}) = \frac{1}{|\Delta_{\text{valid}}|} \sum_{\Delta \in \Delta_{\text{valid}}} \text{NMI}_{\text{corr}}\left(
+\bigcup_{i,t} \{o(s_t^{(i)})\},
+\bigcup_{i,t} \{o(s_{t+\Delta}^{(i)})\}
 \right)}
 $$
 
-Per-timestep persistence at $\Delta=1$ with small ensembles rarely exceeds the shuffle baseline. Use storage instead.
+where $\Delta_{\text{valid}} \subseteq [1, \Delta_{\text{max}}]$ is the set of timescales with enough pooled pairs. Memory and storage are computed from the *same* per-$\Delta$ pooled profile — storage takes its max, memory takes its mean — so the two numbers are always directly comparable on $[0,1]$ and $\text{Mem}(\mathcal{U}) \le \text{Store}(\mathcal{U})$ by construction.
 
----
-
-## 3.5 Memory
-
-Memory is an alias for storage.
+This is not "active information storage" (Lizier et al.), which conditions on the entire past history rather than a single lagged pair. That estimator requires ensembles much larger than ARCO's calibration currently uses (8.1) to avoid being dominated by small-sample bias (3.2). Memory as defined here differs from storage only in aggregation — mean vs. max across $\Delta$ — not in what information-theoretic quantity is estimated at each $\Delta$.
 
 ---
 
@@ -452,6 +515,8 @@ Level 5: COMPUTATIONAL UNIVERSES
 Level 6: UNIVERSAL COMPUTATIONAL UNIVERSES
 Level 7: NOVEL COMPUTATIONAL UNIVERSES
 ```
+
+Levels 3 and 4 are the one place in this list that is not strict containment: Storage Universe (max over timescales) and Memory Universe (mean over timescales) are independently calibrated conditions on the same underlying profile, not nested requirements — see 2.2. A universe can occupy Level 3 without Level 4, or be evaluated against Level 4's criterion without having first been screened at Level 3. Every other adjacent pair strengthens the one below it.
 
 ---
 

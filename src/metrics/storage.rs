@@ -41,14 +41,31 @@ pub fn corrected_nmi<T: Eq + Hash + Clone>(x: &[T], y: &[T], config: &MetricConf
 /// are pooled before computing NMI. This gives the estimator
 /// sufficient samples to distinguish signal from shuffle baseline.
 pub fn storage<T: Eq + Hash + Clone>(trajectories: &[Vec<T>], config: &MetricConfig) -> f64 {
+    storage_profile(trajectories, config)
+        .into_iter()
+        .fold(0.0, f64::max)
+}
+
+/// Pooled shuffle-corrected NMI at every timescale Δ ∈ [1, Δmax] that
+/// had enough pooled pairs to estimate (more than 10, matching the
+/// threshold `storage` has always used).
+///
+/// Shared by [`storage`] (max over Δ) and [`memory`] (mean over Δ) so
+/// the two metrics are computed from the exact same per-Δ estimates,
+/// not independent runs that could disagree due to shuffle-seed
+/// differences.
+fn storage_profile<T: Eq + Hash + Clone>(
+    trajectories: &[Vec<T>],
+    config: &MetricConfig,
+) -> Vec<f64> {
     let n_traj = trajectories.len();
     if n_traj < 2 {
-        return 0.0;
+        return Vec::new();
     }
 
     let traj_len = trajectories.iter().map(|t| t.len()).min().unwrap_or(0);
     let max_delta = config.max_delta.min(traj_len.saturating_sub(1));
-    let mut best: f64 = 0.0;
+    let mut scores = Vec::with_capacity(max_delta);
 
     for delta in 1..=max_delta {
         let mut all_x = Vec::new();
@@ -66,24 +83,130 @@ pub fn storage<T: Eq + Hash + Clone>(trajectories: &[Vec<T>], config: &MetricCon
                 seed: config.seed + delta as u64,
                 ..config.clone()
             };
-            let score = corrected_nmi(&all_x, &all_y, &tconfig);
-            best = best.max(score);
+            scores.push(corrected_nmi(&all_x, &all_y, &tconfig));
         }
     }
 
-    best
+    scores
 }
 
-/// Memory: recoverable information about the past.
+/// Memory: average recoverable information about the past, across
+/// timescales.
 ///
-/// Alias for [`storage`]. In ARCO, memory is quantified as
-/// delayed mutual information I(O_t; O_{t+Δ}), maximized over Δ.
-/// This measures how much information survives over time.
+/// This is **not** an alias for [`storage`]. Both are computed from
+/// the same per-Δ pooled, shuffle-corrected NMI profile
+/// ([`storage_profile`]) — storage takes the maximum over Δ, memory
+/// takes the mean. Each term is itself clamped to `[0, 1]`
+/// (per Constitution), so both metrics live on the same `[0, 1]`
+/// scale and are directly comparable:
 ///
-/// Note: This is not the same as "active information storage"
-/// (Lizier et al.), which conditions on the entire past history.
-/// ARCO's definition is intentionally simpler and computable from
-/// finite ensembles.
+/// - **High storage, low memory**: information survives at one
+///   specific timescale and nowhere else — a sharp resonance, not
+///   durable retention.
+/// - **Storage ≈ memory**: information persists broadly and roughly
+///   equally across timescales.
+/// - **Memory ≤ storage always**, since storage is the max of the
+///   same terms memory averages.
+///
+/// Returns `0.0` if no Δ had enough pooled samples to estimate (the
+/// same condition under which [`storage`] also returns `0.0`).
+///
+/// # Relation to Active Information Storage
+///
+/// This is not "active information storage" (Lizier et al.),
+/// which conditions on the entire past history rather than a single
+/// lagged pair. That estimator needs ensembles much larger than
+/// ARCO's calibration currently uses to avoid being dominated by
+/// small-sample bias — this metric is the version that is actually
+/// trustworthy at the ensemble sizes ARCO runs today. It differs from
+/// `storage` in aggregation (mean vs. max across Δ), not in what kind
+/// of information-theoretic quantity it estimates.
 pub fn memory<T: Eq + Hash + Clone>(trajectories: &[Vec<T>], config: &MetricConfig) -> f64 {
-    storage(trajectories, config)
+    let scores = storage_profile(trajectories, config);
+    if scores.is_empty() {
+        0.0
+    } else {
+        scores.iter().sum::<f64>() / scores.len() as f64
+    }
+}
+
+// ===================================================================
+// Tests
+// ===================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config() -> MetricConfig {
+        MetricConfig {
+            max_delta: 4,
+            n_shuffles: 5,
+            ..MetricConfig::default()
+        }
+    }
+
+    #[test]
+    fn memory_and_storage_agree_on_degenerate_input() {
+        let cfg = config();
+        // Fewer than 2 trajectories: both metrics are defined as 0.0.
+        let single: Vec<Vec<u8>> = vec![vec![0, 1, 0, 1]];
+        assert_eq!(storage(&single, &cfg), 0.0);
+        assert_eq!(memory(&single, &cfg), 0.0);
+
+        let empty: Vec<Vec<u8>> = vec![];
+        assert_eq!(storage(&empty, &cfg), 0.0);
+        assert_eq!(memory(&empty, &cfg), 0.0);
+    }
+
+    #[test]
+    fn memory_never_exceeds_storage() {
+        // memory is the mean of the same per-delta profile storage
+        // takes the max of -- mean(x) <= max(x) for any non-empty x,
+        // so this must hold regardless of the underlying trajectories.
+        let cfg = config();
+        let trajectories: Vec<Vec<u8>> = vec![
+            vec![0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0],
+            vec![1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1],
+            vec![0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 1, 1],
+            vec![1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0],
+        ];
+
+        let s = storage(&trajectories, &cfg);
+        let m = memory(&trajectories, &cfg);
+        assert!(
+            m <= s + 1e-9,
+            "memory ({m}) exceeded storage ({s}); the mean of a profile can never exceed its max"
+        );
+    }
+
+    #[test]
+    fn memory_and_storage_are_different_reductions() {
+        // Regression guard against silently reverting to `memory =
+        // storage`: recompute the shared profile independently and
+        // check `storage` is wired to its max and `memory` to its
+        // mean. Deliberately does not assert a specific numeric gap
+        // -- the exact NMI values depend on the shuffle-correction
+        // RNG -- only that the two public functions are genuinely
+        // different reductions over the same profile.
+        let cfg = config();
+        let trajectories: Vec<Vec<u8>> = vec![
+            vec![0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0],
+            vec![1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1],
+            vec![0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 1, 1],
+            vec![1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0],
+        ];
+
+        let profile = storage_profile(&trajectories, &cfg);
+        assert!(
+            profile.len() > 1,
+            "need more than one timescale in the profile for this test to be meaningful"
+        );
+
+        let expected_max = profile.iter().cloned().fold(0.0, f64::max);
+        let expected_mean = profile.iter().sum::<f64>() / profile.len() as f64;
+
+        assert!((storage(&trajectories, &cfg) - expected_max).abs() < 1e-9);
+        assert!((memory(&trajectories, &cfg) - expected_mean).abs() < 1e-9);
+    }
 }
