@@ -34,6 +34,25 @@ cargo run --release -- graph --quick
 cargo run --release --features serialize -- graph --output results.json
 ```
 
+## Estimators
+
+Every information metric is estimated with a selectable estimator,
+chosen with `--estimator <plugin|mm|qe|nsb>` (default `plugin`) or
+`MetricConfig::estimator` in the library. Shuffle correction is applied
+to all of them, and calibration and scoring always use the same one.
+
+| CLI value | `Estimator` | Method | Since |
+|---|---|---|---|
+| `plugin` | `Plugin` | Empirical-frequency (plug-in) estimate. Default. | all |
+| `mm` | `MM` | Miller–Madow first-order bias correction | 0.5.0 |
+| `qe` | `QE` | Quadratic extrapolation (Strong et al., 1998) | 0.5.0 |
+| `nsb` | `NSB` | Nemenman–Shafee–Bialek (2002), Bayesian mixture of Dirichlet priors; alphabet cardinalities set by `MetricConfig::cardinality` | 0.6.0 |
+
+QE and NSB are different methods; cite them accordingly. In yanked
+releases before 0.5.0, `--estimator nsb` actually ran QE (see [CHANGELOG](https://github.com/kvernet/arco/blob/main/CHANGELOG.md)).
+Estimator choice changes calibrated thresholds, so compare results only within one
+estimator, and report the estimator (and the NSB cardinality policy) with any result.
+
 ## Installation
 
 ```toml

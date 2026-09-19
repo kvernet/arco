@@ -344,7 +344,22 @@ $$
 
 where $Y_{\text{shuf}}$ is $Y$ with temporal order randomly permuted. The expectation is over $k \ge 5$ shuffles. The result is clamped to $[0, 1]$.
 
-**Limitation**: The plugin MI estimator has known small-sample bias when the observation alphabet is large relative to sample size. Shuffle correction subtracts the mean baseline but does not eliminate all bias. Global shuffling assumes no long-range temporal autocorrelation in the null distribution.
+**Limitation**: The plugin MI estimator has known small-sample bias when the observation alphabet is large relative to sample size. Shuffle correction subtracts the mean baseline but does not eliminate all bias; the bias-corrected estimators of 3.2.1 reduce it without removing it. Global shuffling assumes no long-range temporal autocorrelation in the null distribution.
+
+---
+
+## 3.2.1 Estimator Variants
+
+The mutual information in 3.2 is estimated from finite samples by one of four estimators, selected through the metric configuration:
+
+| Estimator | Method |
+|---|---|
+| Plugin (default) | Empirical-frequency estimate |
+| Miller–Madow (MM) | Plugin plus the first-order bias correction $(K_{xy} - K_x - K_y + 1) / (2N \ln 2)$, with $K$ the numbers of *observed* distinct values |
+| Quadratic Extrapolation (QE) | Plugin MI at data fractions $1, 1/2, 1/4$, extrapolated to $1/N \to 0$ (Strong et al., 1998) |
+| Nemenman–Shafee–Bialek (NSB) | Bayesian mixture of symmetric Dirichlet priors (Nemenman, Shafee & Bialek, 2002); requires alphabet cardinalities, supplied by an *observed* or *explicit* cardinality policy |
+
+Shuffle correction applies to every estimator. Null calibration (8.1) and scoring must use the same estimator, and calibrated thresholds are not comparable across estimators. The estimator, and the NSB cardinality policy, are part of the experimental configuration and must be reported with every result. QE and NSB are distinct methods and must be cited as such.
 
 ---
 
@@ -476,18 +491,26 @@ GENERATE → CALIBRATE → OBSERVE → HYPOTHESIZE → PREDICT → TEST → REVI
 > **Claim**: Any universe satisfying Conditions exhibits Property $P$.
 > **Prediction**: For any $\mathcal{U}$ satisfying Conditions, Metric $M(\mathcal{U}) > \theta$.
 > **Test**: Evaluate Metric on $n$ held-out universes satisfying Conditions.
-> **Success Criterion**: Metric exceeds threshold on $\ge 50\%$ of universes.
+> **Success Criterion**: The hypothesis's survival criterion (9.2) is met on the held-out universes.
 > **Falsification**: If the criterion is not met, the hypothesis is rejected.
 
 ---
 
-## 9.2 Hypothesis Scoring
+## 9.2 Hypothesis Scoring and Survival
 
 $$
-\boxed{\text{Score}(H) = \text{Accuracy}(H) - \lambda \cdot \text{Complexity}(H)}
+\boxed{\text{Score}(H) = \text{BalancedAccuracy}(H) - \lambda \cdot \text{Complexity}(H)}
 $$
 
-where $\lambda = 0.1$. A hypothesis **survives** if $\text{Score}(H) > 0$ and $\text{Accuracy}(H) \ge 0.5$.
+where $\lambda = 0.1$ and $\text{BalancedAccuracy} = (\text{Recall} + \text{Specificity}) / 2$, computed on held-out universes from the confusion counts of the condition's prediction against the observed property. Balanced accuracy is used because plain accuracy is dominated by the more common class of the test set, whether or not the condition is predictive.
+
+**Survival.** Every hypothesis carries a *survival criterion*: a predicate over its classification metrics (accuracy, precision, recall, specificity, balanced accuracy, coverage, score) and its complexity. The **default** criterion is
+
+$$
+\text{BalancedAccuracy}(H) \ge 0.5 \;\wedge\; \text{Score}(H) > 0.
+$$
+
+A different criterion may replace the default for a given hypothesis. It must be declared, with a human-readable description, **before** evaluation and reported with the result; changing it after seeing test outcomes defines a new hypothesis.
 
 ---
 

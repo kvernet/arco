@@ -39,11 +39,11 @@ are evaluated against these criteria regardless of outcome.
 
 - [ ] Results reported across ≥ 10 independent seeds with ranges
   (min–max), not single-seed point estimates.
-- [ ] At least one bias-corrected estimator variant tested (Miller-Madow
-  or Quadratic Extrapolation) alongside the plugin estimator with shuffle correction.
+- [ ] At least one bias-corrected estimator variant tested (Miller-Madow,
+  Quadratic Extrapolation, or NSB) alongside the plugin estimator with shuffle correction.
 - [ ] Sample size (n_train, n_test) is documented and justified.
-- [ ] Hypothesis accuracy confidence intervals reported (binomial
-  proportion, 95% CI).
+- [ ] Hypothesis balanced-accuracy confidence intervals reported (counts
+  pooled across seeds, 95% Wilson interval).
 
 ## 4. Hypothesis Design
 
@@ -91,7 +91,7 @@ A candidate clears the substrate bar if:
 - The substrate compiles and runs via `arco <substrate>` CLI
 - The substrate's tests and any feature flags it depends on
   (e.g., `serialize`) run in CI
-- **Re-certification trigger**: If `metrics.rs`, `calibration.rs`,
+- **Re-certification trigger**: If anything in `src/metrics/`, `calibration.rs`,
   or the estimator pipeline changes, substrates that previously
   cleared this bar must be re-evaluated under the new pipeline
   version.
@@ -124,4 +124,4 @@ A candidate clears the publication bar if it additionally:
 
 ---
 
-*Version 1.0. Last updated: 2025-07-30.*
+*Version 1.0. Last updated: 2026-07-30.*
